@@ -1,0 +1,192 @@
+import { getApps, initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, type Auth } from 'firebase/auth';
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDocs,
+  getFirestore,
+  onSnapshot,
+  orderBy,
+  query,
+  setDoc,
+  type Firestore
+} from 'firebase/firestore';
+import type { AppState, Recipe, ShoppingItem, WeeklyMeal } from './types';
+
+type FirebaseConfig = {
+  apiKey: string;
+  authDomain: string;
+  projectId: string;
+  storageBucket: string;
+  messagingSenderId: string;
+  appId: string;
+};
+
+type FirebaseServices = {
+  auth: Auth;
+  db: Firestore;
+  authReady: Promise<void>;
+};
+
+function readConfig(): FirebaseConfig | null {
+  const apiKey = import.meta.env.VITE_FIREBASE_API_KEY as string | undefined;
+  const authDomain = import.meta.env.VITE_FIREBASE_AUTH_DOMAIN as string | undefined;
+  const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID as string | undefined;
+  const storageBucket = import.meta.env.VITE_FIREBASE_STORAGE_BUCKET as string | undefined;
+  const messagingSenderId = import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID as string | undefined;
+  const appId = import.meta.env.VITE_FIREBASE_APP_ID as string | undefined;
+
+  if (!apiKey || !authDomain || !projectId || !storageBucket || !messagingSenderId || !appId) {
+    return null;
+  }
+
+  return { apiKey, authDomain, projectId, storageBucket, messagingSenderId, appId };
+}
+
+export function getFirebaseServices(): FirebaseServices | null {
+  const config = readConfig();
+
+  if (!config) {
+    return null;
+  }
+
+  const app = getApps().length > 0 ? getApps()[0] : initializeApp(config);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+
+  return {
+    auth,
+    db,
+    authReady: auth.currentUser ? Promise.resolve() : signInAnonymously(auth).then(() => undefined)
+  };
+}
+
+function recipesRef(db: Firestore) {
+  return collection(db, 'recipes');
+}
+
+function mealsRef(db: Firestore) {
+  return collection(db, 'weeklyMeals');
+}
+
+function shoppingRef(db: Firestore) {
+  return collection(db, 'shoppingItems');
+}
+
+function normalizeStrings(values: unknown): string[] {
+  return Array.isArray(values) ? values.filter((value): value is string => typeof value === 'string') : [];
+}
+
+function normalizeRecipe(id: string, data: Record<string, unknown>): Recipe {
+  return {
+    id,
+    title: typeof data.title === 'string' ? data.title : 'Untitled recipe',
+    servings: typeof data.servings === 'number' ? data.servings : 4,
+    prepTimeMinutes: typeof data.prepTimeMinutes === 'number' ? data.prepTimeMinutes : 30,
+    ingredients: normalizeStrings(data.ingredients),
+    instructions: normalizeStrings(data.instructions),
+    createdAt: typeof data.createdAt === 'number' ? data.createdAt : Date.now(),
+    updatedAt: typeof data.updatedAt === 'number' ? data.updatedAt : Date.now()
+  };
+}
+
+function normalizeMeal(id: string, data: Record<string, unknown>): WeeklyMeal {
+  return {
+    id,
+    weekStart: typeof data.weekStart === 'string' ? data.weekStart : '',
+    day: data.day === 'monday' || data.day === 'tuesday' || data.day === 'wednesday' || data.day === 'thursday' || data.day === 'friday' || data.day === 'saturday' || data.day === 'sunday' ? data.day : 'monday',
+    slot: data.slot === 'breakfast' || data.slot === 'lunch' || data.slot === 'dinner' ? data.slot : 'dinner',
+    recipeId: typeof data.recipeId === 'string' ? data.recipeId : '',
+    recipeTitle: typeof data.recipeTitle === 'string' ? data.recipeTitle : 'Custom meal',
+    note: typeof data.note === 'string' ? data.note : '',
+    createdAt: typeof data.createdAt === 'number' ? data.createdAt : Date.now(),
+    updatedAt: typeof data.updatedAt === 'number' ? data.updatedAt : Date.now()
+  };
+}
+
+function normalizeShoppingItem(id: string, data: Record<string, unknown>): ShoppingItem {
+  return {
+    id,
+    name: typeof data.name === 'string' ? data.name : 'Unnamed item',
+    quantity: typeof data.quantity === 'number' ? data.quantity : 1,
+    unit: typeof data.unit === 'string' ? data.unit : 'item',
+    aisle: typeof data.aisle === 'string' ? data.aisle : 'General',
+    checked: typeof data.checked === 'boolean' ? data.checked : false,
+    createdAt: typeof data.createdAt === 'number' ? data.createdAt : Date.now(),
+    updatedAt: typeof data.updatedAt === 'number' ? data.updatedAt : Date.now()
+  };
+}
+
+function subscribeToCollection<T>(
+  db: Firestore,
+  refFactory: (db: Firestore) => ReturnType<typeof collection>,
+  normalize: (id: string, data: Record<string, unknown>) => T,
+  onItems: (items: T[]) => void
+) {
+  const itemsQuery = query(refFactory(db), orderBy('updatedAt', 'desc'));
+
+  return onSnapshot(itemsQuery, (snapshot) => {
+    onItems(snapshot.docs.map((document) => normalize(document.id, document.data() as Record<string, unknown>)));
+  });
+}
+
+export function subscribeToRecipes(db: Firestore, onRecipes: (recipes: Recipe[]) => void) {
+  return subscribeToCollection(db, recipesRef, normalizeRecipe, onRecipes);
+}
+
+export function subscribeToWeeklyMeals(db: Firestore, onMeals: (meals: WeeklyMeal[]) => void) {
+  return subscribeToCollection(db, mealsRef, normalizeMeal, onMeals);
+}
+
+export function subscribeToShoppingItems(db: Firestore, onItems: (items: ShoppingItem[]) => void) {
+  return subscribeToCollection(db, shoppingRef, normalizeShoppingItem, onItems);
+}
+
+export async function upsertRecipe(db: Firestore, recipe: Recipe): Promise<void> {
+  await setDoc(doc(recipesRef(db), recipe.id), recipe);
+}
+
+export async function upsertWeeklyMeal(db: Firestore, meal: WeeklyMeal): Promise<void> {
+  await setDoc(doc(mealsRef(db), meal.id), meal);
+}
+
+export async function upsertShoppingItem(db: Firestore, item: ShoppingItem): Promise<void> {
+  await setDoc(doc(shoppingRef(db), item.id), item);
+}
+
+export async function deleteRecipe(db: Firestore, recipeId: string): Promise<void> {
+  await deleteDoc(doc(recipesRef(db), recipeId));
+}
+
+export async function deleteWeeklyMeal(db: Firestore, mealId: string): Promise<void> {
+  await deleteDoc(doc(mealsRef(db), mealId));
+}
+
+export async function deleteShoppingItem(db: Firestore, itemId: string): Promise<void> {
+  await deleteDoc(doc(shoppingRef(db), itemId));
+}
+
+export async function seedIfEmpty(db: Firestore, state: AppState): Promise<void> {
+  const [recipesSnap, mealsSnap, shoppingSnap] = await Promise.all([
+    getDocs(recipesRef(db)),
+    getDocs(mealsRef(db)),
+    getDocs(shoppingRef(db))
+  ]);
+
+  const writes: Promise<void>[] = [];
+
+  if (recipesSnap.empty) {
+    writes.push(...state.recipes.map((recipe) => upsertRecipe(db, recipe)));
+  }
+
+  if (mealsSnap.empty) {
+    writes.push(...state.weeklyMeals.map((meal) => upsertWeeklyMeal(db, meal)));
+  }
+
+  if (shoppingSnap.empty) {
+    writes.push(...state.shoppingItems.map((item) => upsertShoppingItem(db, item)));
+  }
+
+  await Promise.all(writes);
+}
