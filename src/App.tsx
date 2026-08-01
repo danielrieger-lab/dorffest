@@ -38,12 +38,20 @@ const STORAGE_KEY = 'dorffest:state';
 const currencyFormatter = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'EUR' });
 
 const drinkTiles: Tile[] = [
-  { id: 'water', name: 'Water', price: 2, icon: '💧' },
-  { id: 'sparkling-water', name: 'Sparkling Water', price: 2.5, icon: '🫧' },
-  { id: 'cola', name: 'Cola', price: 3, icon: '🥤' },
-  { id: 'lemonade', name: 'Lemonade', price: 3, icon: '🍋' },
-  { id: 'beer', name: 'Beer', price: 4.5, icon: '🍺' },
-  { id: 'wine', name: 'Wine', price: 5.5, icon: '🍷' }
+  { id: 'bier-05', name: '0,5 L Bier', price: 3.5, icon: '🍺' },
+  { id: 'radler-05', name: '0,5 L Radler', price: 3.5, icon: '🍺' },
+  { id: 'weizen-05', name: '0,5 L Weizenbier', price: 3.5, icon: '🍺' },
+  { id: 'alkfrei-bier-05', name: '0,5 L Alkoholfreies Bier', price: 3.5, icon: '🍺' },
+  { id: 'cola-mix-05', name: '0,5 L Cola-Mix', price: 3, icon: '🥤' },
+  { id: 'apfelschorle-05', name: '0,5 L Apfelschorle', price: 3, icon: '🍎' },
+  { id: 'afri-bluna-033', name: '0,33 L Afri-Cola oder Bluna', price: 2.5, icon: '🥤' },
+  { id: 'wasser-05', name: '0,5 L Mineralwasser', price: 2.5, icon: '💧' },
+  { id: 'wein-flasche', name: 'Flasche Wein rot o. weiss', price: 14, icon: '🍷' },
+  { id: 'wein-025', name: '0,25 L Wein rot o. weiss', price: 4, icon: '🍷' },
+  { id: 'weinschorle-025', name: '0,25 L Weinschorle', price: 3.5, icon: '🍷' },
+  { id: 'weinschorle-05', name: '0,5 L Weinschorle', price: 6, icon: '🍷' },
+  { id: 'schnaps', name: 'Schnaps', price: 2.5, icon: '🥃' },
+  { id: 'landsknecht', name: 'Landsknecht', price: 3, icon: '🥃' }
 ];
 
 const foodTiles: Tile[] = [
