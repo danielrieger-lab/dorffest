@@ -3,16 +3,16 @@ import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig(({ mode }) => ({
-  base: mode === 'production' ? '/Laubhaufen/' : '/',
+  base: mode === 'production' ? '/dorffest/' : '/',
   plugins: [
     react(),
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['icon.svg'],
       manifest: {
-        name: 'Laubhaufen',
-        short_name: 'Laubhaufen',
-        description: 'Offline-first collaborative board for shared notes and ongoing work.',
+        name: 'Dorffest',
+        short_name: 'Dorffest',
+        description: 'Offline-first mobile order taking for drinks, foods, and bill splits.',
         theme_color: '#214234',
         background_color: '#f4efe8',
         display: 'standalone',

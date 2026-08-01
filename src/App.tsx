@@ -1,737 +1,738 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import {
-  deleteRecipe,
-  deleteShoppingItem,
-  deleteWeeklyMeal,
-  getFirebaseServices,
-  seedIfEmpty,
-  subscribeToRecipes,
-  subscribeToShoppingItems,
-  subscribeToWeeklyMeals,
-  upsertRecipe,
-  upsertShoppingItem,
-  upsertWeeklyMeal
-} from './lib/firebase';
-import {
-  createRecipe,
-  createShoppingItem,
-  createWeeklyMeal,
-  dayLabel,
-  getMondayForDate,
-  joinLines,
-  loadAppState,
-  nextCheckState,
-  parseLines,
-  saveAppState,
-  slotLabel
-} from './lib/storage';
-import type { DayKey, MealSlot, Recipe, ShoppingItem, WeeklyMeal } from './lib/types';
+import { useEffect, useMemo, useState, type FormEvent, type ReactElement } from 'react';
 
-const dayOrder: DayKey[] = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-const mealSlots: MealSlot[] = ['breakfast', 'lunch', 'dinner'];
+type Category = 'drinks' | 'foods';
+type SplitMode = 'guest' | 'equal';
 
-function createStarterRecipes(): Recipe[] {
-  const now = Date.now();
+interface Guest {
+  id: string;
+  name: string;
+}
 
-  return [
-    {
-      id: 'starter-overnight-oats',
-      title: 'Overnight oats',
-      servings: 4,
-      prepTimeMinutes: 10,
-      ingredients: ['rolled oats', 'milk or plant milk', 'yogurt', 'berries', 'honey'],
-      instructions: ['Mix the oats and liquid.', 'Chill overnight.', 'Top with berries before serving.'],
-      createdAt: now,
-      updatedAt: now
-    },
-    {
-      id: 'starter-vegetable-pasta',
-      title: 'Vegetable pasta',
-      servings: 4,
-      prepTimeMinutes: 25,
-      ingredients: ['pasta', 'zucchini', 'tomatoes', 'olive oil', 'garlic'],
-      instructions: ['Cook the pasta.', 'Sauté vegetables.', 'Combine and season to taste.'],
-      createdAt: now,
-      updatedAt: now
-    },
-    {
-      id: 'starter-sheet-pan-tacos',
-      title: 'Sheet-pan tacos',
-      servings: 4,
-      prepTimeMinutes: 35,
-      ingredients: ['tortillas', 'beans', 'peppers', 'onion', 'salsa'],
-      instructions: ['Roast the filling.', 'Warm tortillas.', 'Assemble with salsa and toppings.'],
-      createdAt: now,
-      updatedAt: now
+interface OrderItem {
+  id: string;
+  category: Category;
+  name: string;
+  quantity: number;
+  unitPrice: number;
+  guestId: string;
+  note: string;
+  createdAt: number;
+}
+
+interface OrderState {
+  tableName: string;
+  splitMode: SplitMode;
+  guests: Guest[];
+  items: OrderItem[];
+}
+
+interface ItemDraft {
+  name: string;
+  quantity: string;
+  unitPrice: string;
+  guestId: string;
+  note: string;
+}
+
+interface CategoryPanelProps {
+  category: Category;
+  title: string;
+  subtitle: string;
+  items: OrderItem[];
+  subtotal: number;
+  draft: ItemDraft;
+  guests: Guest[];
+  onDraftChange: (category: Category, patch: Partial<ItemDraft>) => void;
+  onAddItem: (category: Category) => void;
+  onQuickAdd: (category: Category, name: string, unitPrice: number) => void;
+  onAdjustQuantity: (itemId: string, delta: number) => void;
+  onDeleteItem: (itemId: string) => void;
+  onGuestChange: (itemId: string, guestId: string) => void;
+}
+
+interface GuestPanelProps {
+  guests: Guest[];
+  splitMode: SplitMode;
+  equalShare: number;
+  totalsByGuest: Array<{
+    guest: Guest;
+    drinks: number;
+    foods: number;
+    total: number;
+    itemCount: number;
+  }>;
+  onSplitModeChange: (mode: SplitMode) => void;
+  onGuestNameChange: (guestId: string, name: string) => void;
+  onAddGuest: (name: string) => void;
+  onRemoveGuest: (guestId: string) => void;
+}
+
+const STORAGE_KEY = 'dorffest:state';
+const currencyFormatter = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'EUR' });
+
+const drinkPresets = [
+  { name: 'Water', unitPrice: 2 },
+  { name: 'Sparkling water', unitPrice: 2.5 },
+  { name: 'Lemonade', unitPrice: 3 },
+  { name: 'Beer', unitPrice: 4.5 }
+];
+
+const foodPresets = [
+  { name: 'Pretzel', unitPrice: 3 },
+  { name: 'Fries', unitPrice: 5.5 },
+  { name: 'Bratwurst', unitPrice: 6.5 },
+  { name: 'Burger', unitPrice: 9 }
+];
+
+function createId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+
+  return Math.random().toString(36).slice(2, 11);
+}
+
+function createGuest(name: string): Guest {
+  return {
+    id: createId(),
+    name: name.trim() || 'Guest'
+  };
+}
+
+function createOrderItem(category: Category, draft: ItemDraft): OrderItem | null {
+  const name = draft.name.trim();
+
+  if (!name) {
+    return null;
+  }
+
+  const quantity = Math.max(1, Math.floor(Number(draft.quantity) || 1));
+  const unitPrice = Math.max(0, Number(draft.unitPrice.replace(',', '.')) || 0);
+
+  return {
+    id: createId(),
+    category,
+    name,
+    quantity,
+    unitPrice,
+    guestId: draft.guestId,
+    note: draft.note.trim(),
+    createdAt: Date.now()
+  };
+}
+
+function formatMoney(value: number): string {
+  return currencyFormatter.format(value);
+}
+
+function loadState(): OrderState | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  const raw = window.localStorage.getItem(STORAGE_KEY);
+
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<OrderState>;
+
+    if (typeof parsed.tableName !== 'string' || !Array.isArray(parsed.guests) || !Array.isArray(parsed.items)) {
+      return null;
     }
-  ];
+
+    const guests = parsed.guests
+      .filter((guest): guest is Guest => typeof guest?.id === 'string' && typeof guest?.name === 'string')
+      .map((guest) => ({ id: guest.id, name: guest.name }));
+
+    const items = parsed.items
+      .filter(
+        (item): item is OrderItem =>
+          typeof item?.id === 'string' &&
+          (item.category === 'drinks' || item.category === 'foods') &&
+          typeof item.name === 'string' &&
+          typeof item.quantity === 'number' &&
+          typeof item.unitPrice === 'number' &&
+          typeof item.guestId === 'string' &&
+          typeof item.note === 'string' &&
+          typeof item.createdAt === 'number'
+      )
+      .map((item) => ({ ...item }));
+
+    return {
+      tableName: parsed.tableName,
+      splitMode: parsed.splitMode === 'equal' ? 'equal' : 'guest',
+      guests: guests.length > 0 ? guests : [createGuest('Guest 1')],
+      items
+    };
+  } catch {
+    return null;
+  }
 }
 
-function createStarterMeals(weekStart: string): WeeklyMeal[] {
-  const now = Date.now();
+function saveState(state: OrderState): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
 
-  return [
-    {
-      id: 'starter-monday-breakfast',
-      weekStart,
-      day: 'monday',
-      slot: 'breakfast',
-      recipeId: 'starter-overnight-oats',
-      recipeTitle: 'Overnight oats',
-      note: 'Simple start for the week.',
-      createdAt: now,
-      updatedAt: now
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+function normalizeDraft(draft: ItemDraft): ItemDraft {
+  return {
+    ...draft,
+    guestId: draft.guestId || ''
+  };
+}
+
+function getDefaultState(): OrderState {
+  const firstGuest = createGuest('Guest 1');
+
+  return {
+    tableName: 'Table 1',
+    splitMode: 'guest',
+    guests: [firstGuest],
+    items: []
+  };
+}
+
+function summarizeItems(items: OrderItem[], guestId?: string) {
+  return items.reduce(
+    (summary, item) => {
+      if (guestId && item.guestId !== guestId) {
+        return summary;
+      }
+
+      const lineTotal = item.quantity * item.unitPrice;
+
+      if (item.category === 'drinks') {
+        summary.drinks += lineTotal;
+      } else {
+        summary.foods += lineTotal;
+      }
+
+      summary.total += lineTotal;
+      summary.itemCount += item.quantity;
+      return summary;
     },
-    {
-      id: 'starter-monday-dinner',
-      weekStart,
-      day: 'monday',
-      slot: 'dinner',
-      recipeId: 'starter-vegetable-pasta',
-      recipeTitle: 'Vegetable pasta',
-      note: 'Use any leftover vegetables.',
-      createdAt: now,
-      updatedAt: now
-    },
-    {
-      id: 'starter-wednesday-lunch',
-      weekStart,
-      day: 'wednesday',
-      slot: 'lunch',
-      recipeId: 'starter-sheet-pan-tacos',
-      recipeTitle: 'Sheet-pan tacos',
-      note: 'Good for a quick lunch.',
-      createdAt: now,
-      updatedAt: now
+    { drinks: 0, foods: 0, total: 0, itemCount: 0 }
+  );
+}
+
+function CategoryPanel({
+  category,
+  title,
+  subtitle,
+  items,
+  subtotal,
+  draft,
+  guests,
+  onDraftChange,
+  onAddItem,
+  onQuickAdd,
+  onAdjustQuantity,
+  onDeleteItem,
+  onGuestChange
+}: CategoryPanelProps): ReactElement {
+  const presets = category === 'drinks' ? drinkPresets : foodPresets;
+
+  function submitDraft(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    onAddItem(category);
+  }
+
+  return (
+    <section className={`category-card category-card--${category}`}>
+      <div className="card-heading inline">
+        <div>
+          <p className="eyebrow">{title}</p>
+          <h2>{subtitle}</h2>
+          <p>
+            {items.length} items in this section · subtotal {formatMoney(subtotal)}
+          </p>
+        </div>
+        <strong>{formatMoney(subtotal)}</strong>
+      </div>
+
+      <div className="preset-row" aria-label={`${title} presets`}>
+        {presets.map((preset) => (
+          <button key={preset.name} className="preset-chip" type="button" onClick={() => onQuickAdd(category, preset.name, preset.unitPrice)}>
+            {preset.name}
+            <span>{formatMoney(preset.unitPrice)}</span>
+          </button>
+        ))}
+      </div>
+
+      <form className="entry-form" onSubmit={submitDraft}>
+        <div className="two-column">
+          <label>
+            Item
+            <input value={draft.name} onChange={(event) => onDraftChange(category, { name: event.target.value })} placeholder={`Add ${category.slice(0, -1)}`} />
+          </label>
+          <label>
+            Price
+            <input value={draft.unitPrice} onChange={(event) => onDraftChange(category, { unitPrice: event.target.value })} min="0" step="0.01" inputMode="decimal" type="number" placeholder="0.00" />
+          </label>
+        </div>
+
+        <div className="two-column">
+          <label>
+            Quantity
+            <input value={draft.quantity} onChange={(event) => onDraftChange(category, { quantity: event.target.value })} min="1" step="1" inputMode="numeric" type="number" />
+          </label>
+          <label>
+            Assign to
+            <select value={draft.guestId} onChange={(event) => onDraftChange(category, { guestId: event.target.value })}>
+              {guests.map((guest) => (
+                <option key={guest.id} value={guest.id}>
+                  {guest.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <label>
+          Note
+          <textarea value={draft.note} onChange={(event) => onDraftChange(category, { note: event.target.value })} rows={3} placeholder="Extra ice, no onion, etc." />
+        </label>
+
+        <button type="submit">Add {title.toLowerCase()}</button>
+      </form>
+
+      <div className="item-list">
+        {items.length > 0 ? (
+          items.map((item) => (
+            <article key={item.id} className="order-item">
+              <header>
+                <div>
+                  <span className="entry-kind">{item.category}</span>
+                  <h3>{item.name}</h3>
+                  {item.note ? <p className="entry-details">{item.note}</p> : null}
+                </div>
+                <strong>{formatMoney(item.quantity * item.unitPrice)}</strong>
+              </header>
+
+              <footer>
+                <div className="item-meta">
+                  <span>
+                    {item.quantity} x {formatMoney(item.unitPrice)}
+                  </span>
+                  <span>{item.quantity === 1 ? 'Single item' : 'Multiple items'}</span>
+                </div>
+
+                <div className="order-actions">
+                  <label className="compact-field">
+                    Guest
+                    <select value={item.guestId} onChange={(event) => onGuestChange(item.id, event.target.value)}>
+                      {guests.map((guest) => (
+                        <option key={guest.id} value={guest.id}>
+                          {guest.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <div className="stepper" aria-label="Quantity controls">
+                    <button type="button" onClick={() => onAdjustQuantity(item.id, -1)}>
+                      -
+                    </button>
+                    <span>{item.quantity}</span>
+                    <button type="button" onClick={() => onAdjustQuantity(item.id, 1)}>
+                      +
+                    </button>
+                  </div>
+
+                  <button className="danger" type="button" onClick={() => onDeleteItem(item.id)}>
+                    Remove
+                  </button>
+                </div>
+              </footer>
+            </article>
+          ))
+        ) : (
+          <div className="empty-state">
+            <strong>No {title.toLowerCase()} yet.</strong>
+            <span>Use a preset chip or add a custom item to start the table.</span>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function GuestPanel({
+  guests,
+  splitMode,
+  equalShare,
+  totalsByGuest,
+  onSplitModeChange,
+  onGuestNameChange,
+  onAddGuest,
+  onRemoveGuest
+}: GuestPanelProps): ReactElement {
+  const [guestNameDraft, setGuestNameDraft] = useState('');
+
+  function submitGuest(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+
+    if (!guestNameDraft.trim()) {
+      return;
     }
-  ];
-}
 
-function createStarterShopping(): ShoppingItem[] {
-  const now = Date.now();
+    onAddGuest(guestNameDraft);
+    setGuestNameDraft('');
+  }
 
-  return [
-    { id: 'starter-shopping-oats', name: 'rolled oats', quantity: 1, unit: 'bag', aisle: 'Breakfast', checked: false, createdAt: now, updatedAt: now },
-    { id: 'starter-shopping-pasta', name: 'pasta', quantity: 2, unit: 'packs', aisle: 'Dry goods', checked: false, createdAt: now, updatedAt: now },
-    { id: 'starter-shopping-tortillas', name: 'tortillas', quantity: 1, unit: 'pack', aisle: 'Bakery', checked: false, createdAt: now, updatedAt: now }
-  ];
-}
+  return (
+    <section className="split-card">
+      <div className="card-heading inline">
+        <div>
+          <p className="eyebrow">Bill split</p>
+          <h2>Track each guest's share</h2>
+          <p>Switch between guest-based totals and an equal split for a fast check.</p>
+        </div>
 
-function formatDate(value: number): string {
-  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(value);
+        <div className="split-toggle" role="tablist" aria-label="Split mode">
+          <button type="button" className={splitMode === 'guest' ? 'tab active' : 'tab'} onClick={() => onSplitModeChange('guest')} aria-pressed={splitMode === 'guest'}>
+            By guest
+          </button>
+          <button type="button" className={splitMode === 'equal' ? 'tab active' : 'tab'} onClick={() => onSplitModeChange('equal')} aria-pressed={splitMode === 'equal'}>
+            Equal split
+          </button>
+        </div>
+      </div>
+
+      <div className="split-summary-grid">
+        <article>
+          <strong>{formatMoney(equalShare * guests.length)}</strong>
+          <span>Grand total</span>
+        </article>
+        <article>
+          <strong>{formatMoney(equalShare)}</strong>
+          <span>Equal share</span>
+        </article>
+        <article>
+          <strong>{guests.length}</strong>
+          <span>Guests</span>
+        </article>
+      </div>
+
+      <form className="guest-form" onSubmit={submitGuest}>
+        <label>
+          Add person
+          <input value={guestNameDraft} onChange={(event) => setGuestNameDraft(event.target.value)} placeholder="Guest name" />
+        </label>
+        <button type="submit">Add guest</button>
+      </form>
+
+      <div className="guest-grid">
+        {totalsByGuest.map(({ guest, drinks, foods, total, itemCount }, index) => (
+          <article className="guest-card" key={guest.id}>
+            <header>
+              <label>
+                Person {index + 1}
+                <input value={guest.name} onChange={(event) => onGuestNameChange(guest.id, event.target.value)} />
+              </label>
+              <button className="ghost" type="button" onClick={() => onRemoveGuest(guest.id)} disabled={guests.length === 1}>
+                Remove
+              </button>
+            </header>
+
+            <div className="guest-total">
+              <strong>{splitMode === 'equal' ? formatMoney(equalShare) : formatMoney(total)}</strong>
+              <span>{splitMode === 'equal' ? 'Equal share' : 'Assigned total'}</span>
+            </div>
+
+            <div className="guest-breakdown">
+              <div>
+                <span>Drinks</span>
+                <strong>{formatMoney(drinks)}</strong>
+              </div>
+              <div>
+                <span>Foods</span>
+                <strong>{formatMoney(foods)}</strong>
+              </div>
+              <div>
+                <span>Items</span>
+                <strong>{itemCount}</strong>
+              </div>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
 }
 
 function App() {
-  const persisted = loadAppState();
-  const firebase = useMemo(() => getFirebaseServices(), []);
-  const currentWeekStart = useMemo(() => getMondayForDate(new Date()), []);
-
-  const starterRecipes = useMemo(() => createStarterRecipes(), []);
-  const starterMeals = useMemo(() => createStarterMeals(currentWeekStart), [currentWeekStart]);
-  const starterShopping = useMemo(() => createStarterShopping(), []);
-
-  const [recipes, setRecipes] = useState<Recipe[]>(persisted?.recipes ?? starterRecipes);
-  const [weeklyMeals, setWeeklyMeals] = useState<WeeklyMeal[]>(persisted?.weeklyMeals ?? starterMeals);
-  const [shoppingItems, setShoppingItems] = useState<ShoppingItem[]>(persisted?.shoppingItems ?? starterShopping);
-  const [activeTab, setActiveTab] = useState<'recipes' | 'week' | 'shopping'>('recipes');
-  const [syncStatus, setSyncStatus] = useState(firebase ? 'Connecting shared sync...' : 'Local mode');
-
-  const [recipeDraft, setRecipeDraft] = useState({ title: '', servings: '4', prepTimeMinutes: '30', ingredients: '', instructions: '' });
-  const [mealDraft, setMealDraft] = useState<{ day: DayKey; slot: MealSlot; recipeId: string; note: string }>({
-    day: 'monday',
-    slot: 'dinner',
-    recipeId: '',
-    note: ''
-  });
-  const [shoppingDraft, setShoppingDraft] = useState({ name: '', quantity: '1', unit: 'item', aisle: 'General' });
+  const [state, setState] = useState<OrderState>(() => loadState() ?? getDefaultState());
+  const [drafts, setDrafts] = useState<Record<Category, ItemDraft>>(() => ({
+    drinks: {
+      name: '',
+      quantity: '1',
+      unitPrice: '0.00',
+      guestId: '',
+      note: ''
+    },
+    foods: {
+      name: '',
+      quantity: '1',
+      unitPrice: '0.00',
+      guestId: '',
+      note: ''
+    }
+  }));
 
   useEffect(() => {
-    saveAppState({ recipes, weeklyMeals, shoppingItems });
-  }, [recipes, weeklyMeals, shoppingItems]);
+    saveState(state);
+  }, [state]);
 
   useEffect(() => {
-    if (!firebase) {
-      return;
-    }
+    setDrafts((current) => {
+      const firstGuestId = state.guests[0]?.id ?? '';
 
-    let cancelled = false;
-    let unsubscribeRecipes: (() => void) | undefined;
-    let unsubscribeMeals: (() => void) | undefined;
-    let unsubscribeShopping: (() => void) | undefined;
-
-    void firebase.authReady
-      .then(async () => {
-        if (cancelled) {
-          return;
+      return {
+        drinks: {
+          ...normalizeDraft(current.drinks),
+          guestId: state.guests.some((guest) => guest.id === current.drinks.guestId) ? current.drinks.guestId : firstGuestId
+        },
+        foods: {
+          ...normalizeDraft(current.foods),
+          guestId: state.guests.some((guest) => guest.id === current.foods.guestId) ? current.foods.guestId : firstGuestId
         }
+      };
+    });
+  }, [state.guests]);
 
-        unsubscribeRecipes = subscribeToRecipes(firebase.db, setRecipes);
-        unsubscribeMeals = subscribeToWeeklyMeals(firebase.db, setWeeklyMeals);
-        unsubscribeShopping = subscribeToShoppingItems(firebase.db, (items) => {
-          setShoppingItems(items);
-          setSyncStatus('Shared sync active');
-        });
+  const totals = useMemo(() => summarizeItems(state.items), [state.items]);
+  const drinks = useMemo(() => state.items.filter((item) => item.category === 'drinks'), [state.items]);
+  const foods = useMemo(() => state.items.filter((item) => item.category === 'foods'), [state.items]);
+  const drinksTotal = useMemo(() => summarizeItems(drinks).total, [drinks]);
+  const foodsTotal = useMemo(() => summarizeItems(foods).total, [foods]);
+  const equalShare = state.guests.length > 0 ? totals.total / state.guests.length : 0;
 
-        await seedIfEmpty(firebase.db, {
-          recipes: recipes.length > 0 ? recipes : starterRecipes,
-          weeklyMeals: weeklyMeals.length > 0 ? weeklyMeals : starterMeals,
-          shoppingItems: shoppingItems.length > 0 ? shoppingItems : starterShopping
-        });
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setSyncStatus('Sync unavailable');
-        }
-      });
+  const totalsByGuest = useMemo(
+    () =>
+      state.guests.map((guest) => {
+        const summary = summarizeItems(state.items, guest.id);
 
-    return () => {
-      cancelled = true;
-      unsubscribeRecipes?.();
-      unsubscribeMeals?.();
-      unsubscribeShopping?.();
-    };
-  }, [firebase]);
+        return {
+          guest,
+          drinks: summary.drinks,
+          foods: summary.foods,
+          total: summary.total,
+          itemCount: summary.itemCount
+        };
+      }),
+    [state.guests, state.items]
+  );
 
-  const weekMeals = useMemo(() => weeklyMeals.filter((meal) => meal.weekStart === currentWeekStart), [currentWeekStart, weeklyMeals]);
-  const checkedCount = shoppingItems.filter((item) => item.checked).length;
+  const guestCount = state.guests.length;
 
-  function updateMeal(mealId: string, updater: (meal: WeeklyMeal) => WeeklyMeal): void {
-    setWeeklyMeals((current) => current.map((meal) => (meal.id === mealId ? updater(meal) : meal)));
+  function updateDraft(category: Category, patch: Partial<ItemDraft>): void {
+    setDrafts((current) => ({
+      ...current,
+      [category]: {
+        ...current[category],
+        ...patch
+      }
+    }));
   }
 
-  function updateShopping(itemId: string, updater: (item: ShoppingItem) => ShoppingItem): void {
-    setShoppingItems((current) => current.map((item) => (item.id === itemId ? updater(item) : item)));
-  }
+  function addItem(category: Category): void {
+    const nextItem = createOrderItem(category, drafts[category]);
 
-  async function saveRecipe(recipe: Recipe): Promise<void> {
-    const nextRecipe = { ...recipe, updatedAt: Date.now() };
-    setRecipes((current) => (current.some((item) => item.id === recipe.id) ? current.map((item) => (item.id === recipe.id ? nextRecipe : item)) : [nextRecipe, ...current]));
-
-    if (firebase) {
-      await upsertRecipe(firebase.db, nextRecipe);
-    }
-  }
-
-  async function saveMeal(meal: WeeklyMeal): Promise<void> {
-    const nextMeal = { ...meal, updatedAt: Date.now() };
-    setWeeklyMeals((current) => (current.some((item) => item.id === meal.id) ? current.map((item) => (item.id === meal.id ? nextMeal : item)) : [nextMeal, ...current]));
-
-    if (firebase) {
-      await upsertWeeklyMeal(firebase.db, nextMeal);
-    }
-  }
-
-  async function saveShoppingItem(item: ShoppingItem): Promise<void> {
-    const nextItem = { ...item, updatedAt: Date.now() };
-    setShoppingItems((current) => (current.some((entry) => entry.id === item.id) ? current.map((entry) => (entry.id === item.id ? nextItem : entry)) : [nextItem, ...current]));
-
-    if (firebase) {
-      await upsertShoppingItem(firebase.db, nextItem);
-    }
-  }
-
-  async function deleteRecipeItem(recipeId: string): Promise<void> {
-    setRecipes((current) => current.filter((recipe) => recipe.id !== recipeId));
-    if (firebase) {
-      await deleteRecipe(firebase.db, recipeId);
-    }
-  }
-
-  async function deleteMealItem(mealId: string): Promise<void> {
-    setWeeklyMeals((current) => current.filter((meal) => meal.id !== mealId));
-    if (firebase) {
-      await deleteWeeklyMeal(firebase.db, mealId);
-    }
-  }
-
-  async function deleteShoppingItemLocal(itemId: string): Promise<void> {
-    setShoppingItems((current) => current.filter((item) => item.id !== itemId));
-    if (firebase) {
-      await deleteShoppingItem(firebase.db, itemId);
-    }
-  }
-
-  function handleRecipeSubmit(event: FormEvent<HTMLFormElement>): void {
-    event.preventDefault();
-
-    if (!recipeDraft.title.trim()) {
+    if (!nextItem) {
       return;
     }
 
-    const recipe = createRecipe({
-      title: recipeDraft.title.trim(),
-      servings: Number(recipeDraft.servings) || 4,
-      prepTimeMinutes: Number(recipeDraft.prepTimeMinutes) || 30,
-      ingredients: parseLines(recipeDraft.ingredients),
-      instructions: parseLines(recipeDraft.instructions)
-    });
+    const fallbackGuestId = state.guests[0]?.id ?? '';
 
-    setRecipeDraft({ title: '', servings: '4', prepTimeMinutes: '30', ingredients: '', instructions: '' });
-    void saveRecipe(recipe);
+    setState((current) => ({
+      ...current,
+      items: [nextItem, ...current.items]
+    }));
+
+    setDrafts((current) => ({
+      ...current,
+      [category]: {
+        name: '',
+        quantity: '1',
+        unitPrice: '0.00',
+        guestId: current[category].guestId || fallbackGuestId,
+        note: ''
+      }
+    }));
   }
 
-  function handleMealSubmit(event: FormEvent<HTMLFormElement>): void {
-    event.preventDefault();
+  function addQuickItem(category: Category, name: string, unitPrice: number): void {
+    const guestId = drafts[category].guestId || state.guests[0]?.id || '';
 
-    if (!mealDraft.recipeId) {
-      return;
-    }
-
-    const recipe = recipes.find((entry) => entry.id === mealDraft.recipeId);
-
-    const meal = createWeeklyMeal({
-      weekStart: currentWeekStart,
-      day: mealDraft.day,
-      slot: mealDraft.slot,
-      recipeId: mealDraft.recipeId,
-      recipeTitle: recipe?.title ?? 'Custom meal',
-      note: mealDraft.note.trim()
-    });
-
-    setMealDraft({ day: 'monday', slot: 'dinner', recipeId: '', note: '' });
-    void saveMeal(meal);
+    setState((current) => ({
+      ...current,
+      items: [
+        {
+          id: createId(),
+          category,
+          name,
+          quantity: 1,
+          unitPrice,
+          guestId,
+          note: '',
+          createdAt: Date.now()
+        },
+        ...current.items
+      ]
+    }));
   }
 
-  function handleShoppingSubmit(event: FormEvent<HTMLFormElement>): void {
-    event.preventDefault();
-
-    if (!shoppingDraft.name.trim()) {
-      return;
-    }
-
-    const item = createShoppingItem({
-      name: shoppingDraft.name.trim(),
-      quantity: Number(shoppingDraft.quantity) || 1,
-      unit: shoppingDraft.unit.trim() || 'item',
-      aisle: shoppingDraft.aisle.trim() || 'General'
-    });
-
-    setShoppingDraft({ name: '', quantity: '1', unit: 'item', aisle: 'General' });
-    void saveShoppingItem(item);
+  function adjustQuantity(itemId: string, delta: number): void {
+    setState((current) => ({
+      ...current,
+      items: current.items.map((item) => (item.id === itemId ? { ...item, quantity: Math.max(1, item.quantity + delta) } : item))
+    }));
   }
 
-  const totalIngredients = recipes.reduce((count, recipe) => count + recipe.ingredients.length, 0);
+  function deleteItem(itemId: string): void {
+    setState((current) => ({
+      ...current,
+      items: current.items.filter((item) => item.id !== itemId)
+    }));
+  }
+
+  function changeItemGuest(itemId: string, guestId: string): void {
+    setState((current) => ({
+      ...current,
+      items: current.items.map((item) => (item.id === itemId ? { ...item, guestId } : item))
+    }));
+  }
+
+  function changeGuestName(guestId: string, name: string): void {
+    setState((current) => ({
+      ...current,
+      guests: current.guests.map((guest) => (guest.id === guestId ? { ...guest, name } : guest))
+    }));
+  }
+
+  function addGuest(name: string): void {
+    const guest = createGuest(name);
+
+    setState((current) => ({
+      ...current,
+      guests: [...current.guests, guest]
+    }));
+  }
+
+  function removeGuest(guestId: string): void {
+    setState((current) => {
+      if (current.guests.length === 1) {
+        return current;
+      }
+
+      const fallbackGuestId = current.guests.find((guest) => guest.id !== guestId)?.id ?? current.guests[0].id;
+
+      return {
+        ...current,
+        guests: current.guests.filter((guest) => guest.id !== guestId),
+        items: current.items.map((item) => (item.guestId === guestId ? { ...item, guestId: fallbackGuestId } : item))
+      };
+    });
+  }
+
+  const totalItems = state.items.length;
 
   return (
     <main className="app-shell">
-      <section className="hero-card hero-card--wide">
+      <section className="hero-card">
         <div className="hero-copy">
-          <p className="eyebrow">Laubhaufen</p>
-          <h1>Recipes, weekly meals, and shopping lists in one shared PWA.</h1>
+          <p className="eyebrow">Dorffest PWA</p>
+          <h1>Fast table orders with drinks, food, and bill splits on mobile.</h1>
           <p className="hero-text">
-            Everyone edits the same live Firestore data. There is no visible login step, but the app uses anonymous Firebase auth behind the scenes so the shared data stays protected.
+            Built for Android and iPhone use in the browser or as an installed PWA. Start a table, tap quick items, and keep the subtotal visible while you work.
           </p>
 
-          <div className="hero-meta">
-            <span>{syncStatus}</span>
-            <span>{recipes.length} recipes</span>
-            <span>{weekMeals.length} planned meals</span>
-            <span>{shoppingItems.length} shopping items</span>
+          <div className="hero-controls">
+            <label className="table-field">
+              Table
+              <input value={state.tableName} onChange={(event) => setState((current) => ({ ...current, tableName: event.target.value }))} placeholder="Table 1" />
+            </label>
+
+            <div className="hero-meta">
+              <span>Offline ready</span>
+              <span>{guestCount} guests</span>
+              <span>{totalItems} items</span>
+            </div>
           </div>
         </div>
 
-        <div className="stats-grid stats-grid--wide">
+        <div className="stats-grid">
           <article>
-            <strong>{recipes.length}</strong>
-            <span>Recipes</span>
+            <strong>{formatMoney(totals.total)}</strong>
+            <span>Total</span>
           </article>
           <article>
-            <strong>{weekMeals.length}</strong>
-            <span>Meals this week</span>
+            <strong>{formatMoney(drinksTotal)}</strong>
+            <span>Drinks</span>
           </article>
           <article>
-            <strong>{shoppingItems.length}</strong>
-            <span>Shopping items</span>
+            <strong>{formatMoney(foodsTotal)}</strong>
+            <span>Foods</span>
           </article>
           <article>
-            <strong>{checkedCount}</strong>
-            <span>Checked off</span>
+            <strong>{formatMoney(equalShare)}</strong>
+            <span>Equal share</span>
           </article>
         </div>
       </section>
 
-      <nav className="tab-bar" aria-label="Sections">
-        <button className={activeTab === 'recipes' ? 'tab active' : 'tab'} onClick={() => setActiveTab('recipes')} type="button">
-          Recipes
-        </button>
-        <button className={activeTab === 'week' ? 'tab active' : 'tab'} onClick={() => setActiveTab('week')} type="button">
-          Weekly schedule
-        </button>
-        <button className={activeTab === 'shopping' ? 'tab active' : 'tab'} onClick={() => setActiveTab('shopping')} type="button">
-          Shopping list
-        </button>
-      </nav>
+      <section className="workspace-grid">
+        <CategoryPanel
+          category="drinks"
+          title="Drinks"
+          subtitle="Drinks section"
+          items={drinks}
+          subtotal={drinksTotal}
+          draft={drafts.drinks}
+          guests={state.guests}
+          onDraftChange={updateDraft}
+          onAddItem={addItem}
+          onQuickAdd={addQuickItem}
+          onAdjustQuantity={adjustQuantity}
+          onDeleteItem={deleteItem}
+          onGuestChange={changeItemGuest}
+        />
 
-      {activeTab === 'recipes' ? (
-        <section className="workspace-grid">
-          <form className="composer-card" onSubmit={handleRecipeSubmit}>
-            <div className="card-heading">
-              <h2>Add recipe</h2>
-              <p>Store ingredients and instructions as a shared editable recipe.</p>
-            </div>
+        <CategoryPanel
+          category="foods"
+          title="Foods"
+          subtitle="Food section"
+          items={foods}
+          subtotal={foodsTotal}
+          draft={drafts.foods}
+          guests={state.guests}
+          onDraftChange={updateDraft}
+          onAddItem={addItem}
+          onQuickAdd={addQuickItem}
+          onAdjustQuantity={adjustQuantity}
+          onDeleteItem={deleteItem}
+          onGuestChange={changeItemGuest}
+        />
+      </section>
 
-            <label>
-              Title
-              <input value={recipeDraft.title} onChange={(event) => setRecipeDraft((current) => ({ ...current, title: event.target.value }))} placeholder="Recipe title" />
-            </label>
-
-            <div className="two-column">
-              <label>
-                Servings
-                <input value={recipeDraft.servings} onChange={(event) => setRecipeDraft((current) => ({ ...current, servings: event.target.value }))} min="1" type="number" />
-              </label>
-              <label>
-                Prep time
-                <input value={recipeDraft.prepTimeMinutes} onChange={(event) => setRecipeDraft((current) => ({ ...current, prepTimeMinutes: event.target.value }))} min="1" type="number" />
-              </label>
-            </div>
-
-            <label>
-              Ingredients, one per line
-              <textarea value={recipeDraft.ingredients} onChange={(event) => setRecipeDraft((current) => ({ ...current, ingredients: event.target.value }))} rows={5} />
-            </label>
-
-            <label>
-              Instructions, one per line
-              <textarea value={recipeDraft.instructions} onChange={(event) => setRecipeDraft((current) => ({ ...current, instructions: event.target.value }))} rows={5} />
-            </label>
-
-            <button type="submit">Save recipe</button>
-          </form>
-
-          <div className="content-column">
-            <article className="list-card">
-              <div className="card-heading inline">
-                <div>
-                  <h2>Recipes</h2>
-                  <p>{totalIngredients} ingredients across all recipes</p>
-                </div>
-              </div>
-
-              <div className="item-list">
-                {recipes.map((recipe) => (
-                  <RecipeCard key={recipe.id} recipe={recipe} onSave={saveRecipe} onDelete={() => void deleteRecipeItem(recipe.id)} />
-                ))}
-              </div>
-            </article>
-          </div>
-        </section>
-      ) : null}
-
-      {activeTab === 'week' ? (
-        <section className="workspace-grid">
-          <form className="composer-card" onSubmit={handleMealSubmit}>
-            <div className="card-heading">
-              <h2>Plan a meal</h2>
-              <p>Assign a recipe to any meal slot in the current week.</p>
-            </div>
-
-            <label>
-              Recipe
-              <select value={mealDraft.recipeId} onChange={(event) => setMealDraft((current) => ({ ...current, recipeId: event.target.value }))}>
-                <option value="">Choose a recipe</option>
-                {recipes.map((recipe) => (
-                  <option key={recipe.id} value={recipe.id}>
-                    {recipe.title}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <div className="two-column">
-              <label>
-                Day
-                <select value={mealDraft.day} onChange={(event) => setMealDraft((current) => ({ ...current, day: event.target.value as DayKey }))}>
-                  {dayOrder.map((day) => (
-                    <option key={day} value={day}>
-                      {dayLabel(day)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Meal
-                <select value={mealDraft.slot} onChange={(event) => setMealDraft((current) => ({ ...current, slot: event.target.value as MealSlot }))}>
-                  {mealSlots.map((slot) => (
-                    <option key={slot} value={slot}>
-                      {slotLabel(slot)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            <label>
-              Note
-              <textarea value={mealDraft.note} onChange={(event) => setMealDraft((current) => ({ ...current, note: event.target.value }))} rows={4} />
-            </label>
-
-            <button type="submit">Save meal slot</button>
-          </form>
-
-          <div className="content-column">
-            <article className="list-card schedule-card">
-              <div className="card-heading inline">
-                <div>
-                  <h2>This week</h2>
-                  <p>Week starting {currentWeekStart}</p>
-                </div>
-              </div>
-
-              <div className="weekly-grid">
-                {dayOrder.map((day) => (
-                  <div key={day} className="weekly-day">
-                    <header>
-                      <strong>{dayLabel(day)}</strong>
-                      <span>{weekMeals.filter((meal) => meal.day === day).length} meals</span>
-                    </header>
-
-                    <div className="weekly-day-meals">
-                      {mealSlots.map((slot) => {
-                        const slotEntry = weekMeals.find((meal) => meal.day === day && meal.slot === slot);
-
-                        return slotEntry ? (
-                          <WeeklyMealCard key={slot} meal={slotEntry} recipes={recipes} onSave={saveMeal} onDelete={() => void deleteMealItem(slotEntry.id)} onEdit={(nextMeal) => updateMeal(slotEntry.id, () => nextMeal)} />
-                        ) : (
-                          <div key={slot} className="meal-slot meal-slot-empty">
-                            <span className="meal-slot-label">{slotLabel(slot)}</span>
-                            <span>No meal planned</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </article>
-          </div>
-        </section>
-      ) : null}
-
-      {activeTab === 'shopping' ? (
-        <section className="workspace-grid">
-          <form className="composer-card" onSubmit={handleShoppingSubmit}>
-            <div className="card-heading">
-              <h2>Add shopping item</h2>
-              <p>Keep the list synced and check things off as they are bought.</p>
-            </div>
-
-            <label>
-              Item
-              <input value={shoppingDraft.name} onChange={(event) => setShoppingDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Flour" />
-            </label>
-
-            <div className="two-column">
-              <label>
-                Quantity
-                <input value={shoppingDraft.quantity} onChange={(event) => setShoppingDraft((current) => ({ ...current, quantity: event.target.value }))} type="number" min="1" />
-              </label>
-              <label>
-                Unit
-                <input value={shoppingDraft.unit} onChange={(event) => setShoppingDraft((current) => ({ ...current, unit: event.target.value }))} placeholder="kg, pack, bottle" />
-              </label>
-            </div>
-
-            <label>
-              Aisle
-              <input value={shoppingDraft.aisle} onChange={(event) => setShoppingDraft((current) => ({ ...current, aisle: event.target.value }))} placeholder="Produce" />
-            </label>
-
-            <button type="submit">Save item</button>
-          </form>
-
-          <div className="content-column">
-            <article className="list-card">
-              <div className="card-heading inline">
-                <div>
-                  <h2>Shopping list</h2>
-                  <p>{checkedCount} of {shoppingItems.length} checked</p>
-                </div>
-              </div>
-
-              <div className="item-list">
-                {shoppingItems.map((item) => (
-                  <ShoppingCard
-                    key={item.id}
-                    item={item}
-                    onToggle={() => updateShopping(item.id, (current) => ({ ...current, checked: nextCheckState(current.checked), updatedAt: Date.now() }))}
-                    onSave={saveShoppingItem}
-                    onDelete={() => void deleteShoppingItemLocal(item.id)}
-                  />
-                ))}
-              </div>
-            </article>
-          </div>
-        </section>
-      ) : null}
+      <GuestPanel
+        guests={state.guests}
+        splitMode={state.splitMode}
+        equalShare={equalShare}
+        totalsByGuest={totalsByGuest}
+        onSplitModeChange={(mode) => setState((current) => ({ ...current, splitMode: mode }))}
+        onGuestNameChange={changeGuestName}
+        onAddGuest={addGuest}
+        onRemoveGuest={removeGuest}
+      />
     </main>
-  );
-}
-
-function RecipeCard({ recipe, onSave, onDelete }: { recipe: Recipe; onSave: (recipe: Recipe) => Promise<void>; onDelete: () => void }) {
-  const [draft, setDraft] = useState(recipe);
-
-  useEffect(() => {
-    setDraft(recipe);
-  }, [recipe]);
-
-  function persist(): void {
-    void onSave({ ...draft, updatedAt: Date.now() });
-  }
-
-  return (
-    <article className="entry-card recipe-card">
-      <header>
-        <div>
-          <p className="entry-kind">Recipe</p>
-          <input className="inline-input title-input" value={draft.title} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value, updatedAt: Date.now() }))} onBlur={persist} />
-        </div>
-        <span className="status-pill">{draft.servings} servings</span>
-      </header>
-
-      <div className="two-column recipe-meta">
-        <label>
-          Servings
-          <input type="number" min="1" value={draft.servings} onChange={(event) => setDraft((current) => ({ ...current, servings: Number(event.target.value), updatedAt: Date.now() }))} onBlur={persist} />
-        </label>
-        <label>
-          Prep time
-          <input type="number" min="1" value={draft.prepTimeMinutes} onChange={(event) => setDraft((current) => ({ ...current, prepTimeMinutes: Number(event.target.value), updatedAt: Date.now() }))} onBlur={persist} />
-        </label>
-      </div>
-
-      <div className="recipe-columns">
-        <label>
-          Ingredients
-          <textarea value={joinLines(draft.ingredients)} onChange={(event) => setDraft((current) => ({ ...current, ingredients: parseLines(event.target.value), updatedAt: Date.now() }))} onBlur={persist} rows={5} />
-        </label>
-        <label>
-          Instructions
-          <textarea value={joinLines(draft.instructions)} onChange={(event) => setDraft((current) => ({ ...current, instructions: parseLines(event.target.value), updatedAt: Date.now() }))} onBlur={persist} rows={5} />
-        </label>
-      </div>
-
-      <footer>
-        <span>{formatDate(recipe.updatedAt)}</span>
-        <div className="entry-actions entry-actions--compact">
-          <button type="button" onClick={persist}>
-            Save
-          </button>
-          <button type="button" className="danger" onClick={onDelete}>
-            Delete
-          </button>
-        </div>
-      </footer>
-    </article>
-  );
-}
-
-function WeeklyMealCard({
-  meal,
-  recipes,
-  onSave,
-  onDelete,
-  onEdit
-}: {
-  meal: WeeklyMeal;
-  recipes: Recipe[];
-  onSave: (meal: WeeklyMeal) => Promise<void>;
-  onDelete: () => void;
-  onEdit: (nextMeal: WeeklyMeal) => void;
-}) {
-  const [draft, setDraft] = useState(meal);
-
-  useEffect(() => {
-    setDraft(meal);
-  }, [meal]);
-
-  function persist(): void {
-    const nextMeal = { ...draft, updatedAt: Date.now() };
-    onEdit(nextMeal);
-    void onSave(nextMeal);
-  }
-
-  return (
-    <article className="meal-card">
-      <div className="meal-card-top">
-        <strong>{slotLabel(draft.slot)}</strong>
-        <span>{draft.recipeTitle}</span>
-      </div>
-
-      <select
-        value={draft.recipeId}
-        onChange={(event) => {
-          const selected = recipes.find((recipe) => recipe.id === event.target.value);
-          setDraft((current) => ({ ...current, recipeId: event.target.value, recipeTitle: selected?.title ?? 'Custom meal', updatedAt: Date.now() }));
-        }}
-        onBlur={persist}
-      >
-        <option value="">Custom meal</option>
-        {recipes.map((recipe) => (
-          <option key={recipe.id} value={recipe.id}>
-            {recipe.title}
-          </option>
-        ))}
-      </select>
-
-      <textarea value={draft.note} onChange={(event) => setDraft((current) => ({ ...current, note: event.target.value, updatedAt: Date.now() }))} onBlur={persist} rows={3} placeholder="Optional note" />
-
-      <div className="entry-actions entry-actions--compact">
-        <button type="button" onClick={persist}>
-          Save
-        </button>
-        <button type="button" className="danger" onClick={onDelete}>
-          Delete
-        </button>
-      </div>
-    </article>
-  );
-}
-
-function ShoppingCard({
-  item,
-  onToggle,
-  onSave,
-  onDelete
-}: {
-  item: ShoppingItem;
-  onToggle: () => void;
-  onSave: (item: ShoppingItem) => Promise<void>;
-  onDelete: () => void;
-}) {
-  const [draft, setDraft] = useState(item);
-
-  useEffect(() => {
-    setDraft(item);
-  }, [item]);
-
-  function persist(): void {
-    void onSave({ ...draft, updatedAt: Date.now() });
-  }
-
-  return (
-    <article className={draft.checked ? 'shopping-card checked' : 'shopping-card'}>
-      <label className="shopping-inline">
-        <input type="checkbox" checked={draft.checked} onChange={onToggle} />
-        <input className="inline-input title-input" value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value, updatedAt: Date.now() }))} onBlur={persist} />
-      </label>
-
-      <div className="two-column">
-        <input type="number" min="1" value={draft.quantity} onChange={(event) => setDraft((current) => ({ ...current, quantity: Number(event.target.value), updatedAt: Date.now() }))} onBlur={persist} />
-        <input value={draft.unit} onChange={(event) => setDraft((current) => ({ ...current, unit: event.target.value, updatedAt: Date.now() }))} onBlur={persist} />
-      </div>
-
-      <input value={draft.aisle} onChange={(event) => setDraft((current) => ({ ...current, aisle: event.target.value, updatedAt: Date.now() }))} onBlur={persist} placeholder="Aisle" />
-
-      <div className="entry-actions entry-actions--compact">
-        <button type="button" onClick={persist}>
-          Save
-        </button>
-        <button type="button" className="danger" onClick={onDelete}>
-          Delete
-        </button>
-      </div>
-    </article>
   );
 }
 
