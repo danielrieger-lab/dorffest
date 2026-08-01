@@ -55,12 +55,15 @@ const drinkTiles: Tile[] = [
 ];
 
 const foodTiles: Tile[] = [
-  { id: 'pretzel', name: 'Pretzel', price: 3, icon: '🥨' },
-  { id: 'fries', name: 'Fries', price: 5.5, icon: '🍟' },
-  { id: 'bratwurst', name: 'Bratwurst', price: 6.5, icon: '🌭' },
-  { id: 'burger', name: 'Burger', price: 9, icon: '🍔' },
-  { id: 'schnitzel', name: 'Schnitzel', price: 12, icon: '🍽️' },
-  { id: 'salad', name: 'Salad', price: 7, icon: '🥗' }
+  { id: 'spanferkel', name: 'Spanferkel', price: 9, icon: '🍖' },
+  { id: 'beilagensalat', name: 'Beilagensalat', price: 3.5, icon: '🥗' },
+  { id: 'ziegelhuettenteller', name: 'Ziegelhüttenteller', price: 11.5, icon: '🍽️' },
+  { id: 'steak', name: 'Steak', price: 4.5, icon: '🥩' },
+  { id: 'grillwurst', name: 'Grillwurst', price: 2.5, icon: '🌭' },
+  { id: 'cevapcici', name: 'Cevapcici', price: 7, icon: '🍢' },
+  { id: 'gemueselasagne-veg', name: 'Gemüselasagne (veg)', price: 6, icon: '🍲' },
+  { id: 'kaesebrot', name: 'Käsebrot', price: 5.5, icon: '🧀' },
+  { id: 'pressack-weiss', name: 'Preßack (Weiss) mit Brot & Musik', price: 7.5, icon: '🍽️' }
 ];
 
 function createId(): string {
@@ -336,7 +339,7 @@ function App() {
               <strong>{formatMoney(foodTotals.foods)}</strong>
             </div>
 
-            <div className="tile-grid">
+            <div className="tile-grid tile-grid-foods">
               {foodTiles.map((tile) => (
                 <button key={tile.id} type="button" className="order-tile" onClick={() => addTile(tile, 'foods')}>
                   <span className="tile-icon">{tile.icon}</span>
