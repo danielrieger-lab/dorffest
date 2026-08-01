@@ -6,6 +6,11 @@ type Category = 'drinks' | 'foods';
 
 type SplitMode = 'equal' | 'guest';
 
+type SideDish = {
+  name: string;
+  price: number;
+};
+
 interface Tile {
   id: string;
   name: string;
@@ -18,6 +23,8 @@ interface OrderItem {
   name: string;
   price: number;
   quantity: number;
+  mainDish?: string;
+  sideDish?: string;
 }
 
 interface Guest {
@@ -35,6 +42,15 @@ interface AppState {
 
 const STORAGE_KEY = 'dorffest:state';
 const currencyFormatter = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'EUR' });
+
+const sideDishOptions: SideDish[] = [
+  { name: 'Knödel', price: 5 },
+  { name: 'Kartoffelsalat', price: 4 },
+  { name: 'Pommes', price: 4 },
+  { name: 'Semmel', price: 1 }
+];
+
+const mainDishesWithSides = new Set(['spanferkel', 'ziegelhuettenteller', 'steak', 'grillwurst', 'cevapcici']);
 
 const drinkTiles: Tile[] = [
   { id: 'bier-05', name: '0,5 L Bier', price: 3.5 },
@@ -156,11 +172,16 @@ function summarize(items: OrderItem[]) {
   );
 }
 
+function formatDishName(mainDish: string, sideDish?: string): string {
+  return sideDish ? `${mainDish} + ${sideDish}` : mainDish;
+}
+
 function App() {
   const [state, setState] = useState<AppState>(() => loadState());
   const trackRef = useRef<HTMLDivElement | null>(null);
   const [otherFoodTitle, setOtherFoodTitle] = useState('');
   const [otherFoodPrice, setOtherFoodPrice] = useState('0,00');
+  const [pendingMainDish, setPendingMainDish] = useState<Tile | null>(null);
 
   useEffect(() => {
     saveState(state);
@@ -173,9 +194,11 @@ function App() {
   const total = drinkTotals.total + foodTotals.total;
   const equalShare = state.guests.length > 0 ? total / state.guests.length : 0;
 
-  function addTile(tile: Tile, category: Category): void {
+  function addTile(tile: Tile, category: Category, sideDish?: SideDish): void {
+    const finalName = formatDishName(tile.name, sideDish?.name);
+
     setState((current) => {
-      const existing = current.items.find((item) => item.category === category && item.name === tile.name);
+      const existing = current.items.find((item) => item.category === category && item.name === finalName);
 
       if (existing) {
         return {
@@ -190,14 +213,34 @@ function App() {
           {
             id: createId(),
             category,
-            name: tile.name,
-            price: tile.price,
-            quantity: 1
+            name: finalName,
+            price: tile.price + (sideDish?.price ?? 0),
+            quantity: 1,
+            mainDish: tile.name,
+            sideDish: sideDish?.name
           },
           ...current.items
         ]
       };
     });
+  }
+
+  function handleFoodTileClick(tile: Tile): void {
+    if (mainDishesWithSides.has(tile.id)) {
+      setPendingMainDish(tile);
+      return;
+    }
+
+    addTile(tile, 'foods');
+  }
+
+  function selectSideDish(sideDish: SideDish): void {
+    if (!pendingMainDish) {
+      return;
+    }
+
+    addTile(pendingMainDish, 'foods', sideDish);
+    setPendingMainDish(null);
   }
 
   function addOtherFood(): void {
@@ -367,7 +410,7 @@ function App() {
 
             <div className="tile-grid tile-grid-foods">
               {foodTiles.map((tile) => (
-                <button key={tile.id} type="button" className="order-tile" onClick={() => addTile(tile, 'foods')}>
+                <button key={tile.id} type="button" className="order-tile" onClick={() => handleFoodTileClick(tile)}>
                   <strong>{tile.name}</strong>
                   <span>{formatMoney(tile.price)}</span>
                 </button>
@@ -468,6 +511,35 @@ function App() {
           </section>
         </div>
       </section>
+
+      {pendingMainDish ? (
+        <div className="side-dish-backdrop" role="presentation" onClick={() => setPendingMainDish(null)}>
+          <section className="side-dish-modal" role="dialog" aria-modal="true" aria-labelledby="side-dish-title" onClick={(event) => event.stopPropagation()}>
+            <div className="panel-head">
+              <div>
+                <p className="eyebrow">Beilage</p>
+                <h2 id="side-dish-title">Choose a side dish</h2>
+              </div>
+              <strong>{pendingMainDish.name}</strong>
+            </div>
+
+            <div className="side-dish-grid">
+              {sideDishOptions.map((sideDish) => (
+                <button key={sideDish.name} type="button" className="side-dish-option" onClick={() => selectSideDish(sideDish)}>
+                  <strong>{sideDish.name}</strong>
+                  <span>{formatMoney(sideDish.price)}</span>
+                </button>
+              ))}
+            </div>
+
+            <div className="split-toolbar">
+              <button type="button" className="tab" onClick={() => setPendingMainDish(null)}>
+                Cancel
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }
