@@ -10,7 +10,6 @@ interface Tile {
   id: string;
   name: string;
   price: number;
-  icon: string;
 }
 
 interface OrderItem {
@@ -38,32 +37,32 @@ const STORAGE_KEY = 'dorffest:state';
 const currencyFormatter = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'EUR' });
 
 const drinkTiles: Tile[] = [
-  { id: 'bier-05', name: '0,5 L Bier', price: 3.5, icon: '🍺' },
-  { id: 'radler-05', name: '0,5 L Radler', price: 3.5, icon: '🍺' },
-  { id: 'weizen-05', name: '0,5 L Weizenbier', price: 3.5, icon: '🍺' },
-  { id: 'alkfrei-bier-05', name: '0,5 L Alkoholfreies Bier', price: 3.5, icon: '🍺' },
-  { id: 'cola-mix-05', name: '0,5 L Cola-Mix', price: 3, icon: '🥤' },
-  { id: 'apfelschorle-05', name: '0,5 L Apfelschorle', price: 3, icon: '🍎' },
-  { id: 'afri-bluna-033', name: '0,33 L Afri-Cola oder Bluna', price: 2.5, icon: '🥤' },
-  { id: 'wasser-05', name: '0,5 L Mineralwasser', price: 2.5, icon: '💧' },
-  { id: 'wein-flasche', name: 'Flasche Wein rot o. weiss', price: 14, icon: '🍷' },
-  { id: 'wein-025', name: '0,25 L Wein rot o. weiss', price: 4, icon: '🍷' },
-  { id: 'weinschorle-025', name: '0,25 L Weinschorle', price: 3.5, icon: '🍷' },
-  { id: 'weinschorle-05', name: '0,5 L Weinschorle', price: 6, icon: '🍷' },
-  { id: 'schnaps', name: 'Schnaps', price: 2.5, icon: '🥃' },
-  { id: 'landsknecht', name: 'Landsknecht', price: 3, icon: '🥃' }
+  { id: 'bier-05', name: '0,5 L Bier', price: 3.5 },
+  { id: 'radler-05', name: '0,5 L Radler', price: 3.5 },
+  { id: 'weizen-05', name: '0,5 L Weizenbier', price: 3.5 },
+  { id: 'alkfrei-bier-05', name: '0,5 L Alkoholfreies Bier', price: 3.5 },
+  { id: 'cola-mix-05', name: '0,5 L Cola-Mix', price: 3 },
+  { id: 'apfelschorle-05', name: '0,5 L Apfelschorle', price: 3 },
+  { id: 'afri-bluna-033', name: '0,33 L Afri-Cola oder Bluna', price: 2.5 },
+  { id: 'wasser-05', name: '0,5 L Mineralwasser', price: 2.5 },
+  { id: 'wein-flasche', name: 'Flasche Wein rot o. weiss', price: 14 },
+  { id: 'wein-025', name: '0,25 L Wein rot o. weiss', price: 4 },
+  { id: 'weinschorle-025', name: '0,25 L Weinschorle', price: 3.5 },
+  { id: 'weinschorle-05', name: '0,5 L Weinschorle', price: 6 },
+  { id: 'schnaps', name: 'Schnaps', price: 2.5 },
+  { id: 'landsknecht', name: 'Landsknecht', price: 3 }
 ];
 
 const foodTiles: Tile[] = [
-  { id: 'spanferkel', name: 'Spanferkel', price: 9, icon: '🍖' },
-  { id: 'beilagensalat', name: 'Beilagensalat', price: 3.5, icon: '🥗' },
-  { id: 'ziegelhuettenteller', name: 'Ziegelhüttenteller', price: 11.5, icon: '🍽️' },
-  { id: 'steak', name: 'Steak', price: 4.5, icon: '🥩' },
-  { id: 'grillwurst', name: 'Grillwurst', price: 2.5, icon: '🌭' },
-  { id: 'cevapcici', name: 'Cevapcici', price: 7, icon: '🍢' },
-  { id: 'gemueselasagne-veg', name: 'Gemüselasagne (veg)', price: 6, icon: '🍲' },
-  { id: 'kaesebrot', name: 'Käsebrot', price: 5.5, icon: '🧀' },
-  { id: 'pressack-weiss', name: 'Preßack (Weiss) mit Brot & Musik', price: 7.5, icon: '🍽️' }
+  { id: 'spanferkel', name: 'Spanferkel', price: 9 },
+  { id: 'beilagensalat', name: 'Beilagensalat', price: 3.5 },
+  { id: 'ziegelhuettenteller', name: 'Ziegelhüttenteller', price: 11.5 },
+  { id: 'steak', name: 'Steak', price: 4.5 },
+  { id: 'grillwurst', name: 'Grillwurst', price: 2.5 },
+  { id: 'cevapcici', name: 'Cevapcici', price: 7 },
+  { id: 'gemueselasagne-veg', name: 'Gemüselasagne (veg)', price: 6 },
+  { id: 'kaesebrot', name: 'Käsebrot', price: 5.5 },
+  { id: 'pressack-weiss', name: 'Preßack (Weiss) mit Brot & Musik', price: 7.5 }
 ];
 
 function createId(): string {
@@ -160,6 +159,8 @@ function summarize(items: OrderItem[]) {
 function App() {
   const [state, setState] = useState<AppState>(() => loadState());
   const trackRef = useRef<HTMLDivElement | null>(null);
+  const [otherFoodTitle, setOtherFoodTitle] = useState('');
+  const [otherFoodPrice, setOtherFoodPrice] = useState('0,00');
 
   useEffect(() => {
     saveState(state);
@@ -197,6 +198,32 @@ function App() {
         ]
       };
     });
+  }
+
+  function addOtherFood(): void {
+    const title = otherFoodTitle.trim();
+    const price = Number(otherFoodPrice.replace(',', '.'));
+
+    if (!title || Number.isNaN(price) || price < 0) {
+      return;
+    }
+
+    setState((current) => ({
+      ...current,
+      items: [
+        {
+          id: createId(),
+          category: 'foods',
+          name: title,
+          price,
+          quantity: 1
+        },
+        ...current.items
+      ]
+    }));
+
+    setOtherFoodTitle('');
+    setOtherFoodPrice('0,00');
   }
 
   function changeQuantity(itemId: string, delta: number): void {
@@ -294,7 +321,6 @@ function App() {
             <div className="tile-grid tile-grid-drinks">
               {drinkTiles.map((tile) => (
                 <button key={tile.id} type="button" className="order-tile" onClick={() => addTile(tile, 'drinks')}>
-                  <span className="tile-icon">{tile.icon}</span>
                   <strong>{tile.name}</strong>
                   <span>{formatMoney(tile.price)}</span>
                 </button>
@@ -342,11 +368,25 @@ function App() {
             <div className="tile-grid tile-grid-foods">
               {foodTiles.map((tile) => (
                 <button key={tile.id} type="button" className="order-tile" onClick={() => addTile(tile, 'foods')}>
-                  <span className="tile-icon">{tile.icon}</span>
                   <strong>{tile.name}</strong>
                   <span>{formatMoney(tile.price)}</span>
                 </button>
               ))}
+
+              <div className="order-tile order-tile-custom">
+                <strong>Sonstiges</strong>
+                <label>
+                  Titel
+                  <input value={otherFoodTitle} onChange={(event) => setOtherFoodTitle(event.target.value)} placeholder="Custom food title" />
+                </label>
+                <label>
+                  Preis
+                  <input value={otherFoodPrice} onChange={(event) => setOtherFoodPrice(event.target.value)} inputMode="decimal" placeholder="0,00" />
+                </label>
+                <button type="button" onClick={addOtherFood}>
+                  Add food
+                </button>
+              </div>
             </div>
 
             <div className="order-list">

@@ -217,6 +217,21 @@ button:hover {
   text-align: left;
 }
 
+.order-tile-custom {
+  gap: 10px;
+}
+
+.order-tile-custom label {
+  display: grid;
+  gap: 6px;
+  color: #264039;
+  font-weight: 700;
+}
+
+.order-tile-custom button {
+  width: 100%;
+}
+
 .order-tile strong,
 .panel-head strong,
 .guest-card strong {
