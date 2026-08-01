@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-type Category = 'drinks' | 'foods';
-type SplitMode = 'guest' | 'equal';
+type Panel = 'drinks' | 'foods' | 'payment';
 
-interface OrderTile {
+type Category = 'drinks' | 'foods';
+
+type SplitMode = 'equal' | 'guest';
+
+interface Tile {
   id: string;
   name: string;
   price: number;
@@ -28,13 +31,13 @@ interface AppState {
   splitMode: SplitMode;
   guests: Guest[];
   items: OrderItem[];
-  activePanel: Category;
+  activePanel: Panel;
 }
 
 const STORAGE_KEY = 'dorffest:state';
 const currencyFormatter = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'EUR' });
 
-const drinkTiles: OrderTile[] = [
+const drinkTiles: Tile[] = [
   { id: 'water', name: 'Water', price: 2, icon: '💧' },
   { id: 'sparkling-water', name: 'Sparkling Water', price: 2.5, icon: '🫧' },
   { id: 'cola', name: 'Cola', price: 3, icon: '🥤' },
@@ -43,7 +46,7 @@ const drinkTiles: OrderTile[] = [
   { id: 'wine', name: 'Wine', price: 5.5, icon: '🍷' }
 ];
 
-const foodTiles: OrderTile[] = [
+const foodTiles: Tile[] = [
   { id: 'pretzel', name: 'Pretzel', price: 3, icon: '🥨' },
   { id: 'fries', name: 'Fries', price: 5.5, icon: '🍟' },
   { id: 'bratwurst', name: 'Bratwurst', price: 6.5, icon: '🌭' },
@@ -64,61 +67,56 @@ function formatMoney(value: number): string {
   return currencyFormatter.format(value);
 }
 
+function createDefaultState(): AppState {
+  return {
+    tableName: 'Table 1',
+    splitMode: 'guest',
+    guests: [{ id: createId(), name: 'Guest 1' }],
+    items: [],
+    activePanel: 'drinks'
+  };
+}
+
 function loadState(): AppState {
   if (typeof window === 'undefined') {
-    return {
-      tableName: 'Table 1',
-      splitMode: 'guest',
-      guests: [{ id: createId(), name: 'Guest 1' }],
-      items: [],
-      activePanel: 'drinks'
-    };
+    return createDefaultState();
   }
 
   const raw = window.localStorage.getItem(STORAGE_KEY);
 
   if (!raw) {
-    return {
-      tableName: 'Table 1',
-      splitMode: 'guest',
-      guests: [{ id: createId(), name: 'Guest 1' }],
-      items: [],
-      activePanel: 'drinks'
-    };
+    return createDefaultState();
   }
 
   try {
     const parsed = JSON.parse(raw) as Partial<AppState>;
+
     const guests = Array.isArray(parsed.guests) && parsed.guests.length > 0
       ? parsed.guests
           .filter((guest): guest is Guest => typeof guest?.id === 'string' && typeof guest?.name === 'string')
           .map((guest) => ({ id: guest.id, name: guest.name }))
       : [{ id: createId(), name: 'Guest 1' }];
 
+    const items = Array.isArray(parsed.items)
+      ? parsed.items.filter(
+          (item): item is OrderItem =>
+            typeof item?.id === 'string' &&
+            (item.category === 'drinks' || item.category === 'foods') &&
+            typeof item.name === 'string' &&
+            typeof item.price === 'number' &&
+            typeof item.quantity === 'number'
+        )
+      : [];
+
     return {
       tableName: typeof parsed.tableName === 'string' ? parsed.tableName : 'Table 1',
       splitMode: parsed.splitMode === 'equal' ? 'equal' : 'guest',
       guests,
-      items: Array.isArray(parsed.items)
-        ? parsed.items.filter(
-            (item): item is OrderItem =>
-              typeof item?.id === 'string' &&
-              (item.category === 'drinks' || item.category === 'foods') &&
-              typeof item.name === 'string' &&
-              typeof item.price === 'number' &&
-              typeof item.quantity === 'number'
-          )
-        : [],
-      activePanel: parsed.activePanel === 'foods' ? 'foods' : 'drinks'
+      items,
+      activePanel: parsed.activePanel === 'foods' || parsed.activePanel === 'payment' ? parsed.activePanel : 'drinks'
     };
   } catch {
-    return {
-      tableName: 'Table 1',
-      splitMode: 'guest',
-      guests: [{ id: createId(), name: 'Guest 1' }],
-      items: [],
-      activePanel: 'drinks'
-    };
+    return createDefaultState();
   }
 }
 
@@ -130,10 +128,27 @@ function saveState(state: AppState): void {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
+function summarize(items: OrderItem[]) {
+  return items.reduce(
+    (summary, item) => {
+      const lineTotal = item.price * item.quantity;
+
+      if (item.category === 'drinks') {
+        summary.drinks += lineTotal;
+      } else {
+        summary.foods += lineTotal;
+      }
+
+      summary.total += lineTotal;
+      return summary;
+    },
+    { drinks: 0, foods: 0, total: 0 }
+  );
+}
+
 function App() {
   const [state, setState] = useState<AppState>(() => loadState());
-  const [splitOpen, setSplitOpen] = useState(false);
-  const swipeTrackRef = useRef<HTMLDivElement | null>(null);
+  const trackRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     saveState(state);
@@ -141,25 +156,14 @@ function App() {
 
   const drinks = useMemo(() => state.items.filter((item) => item.category === 'drinks'), [state.items]);
   const foods = useMemo(() => state.items.filter((item) => item.category === 'foods'), [state.items]);
-  const drinksTotal = useMemo(() => drinks.reduce((sum, item) => sum + item.price * item.quantity, 0), [drinks]);
-  const foodsTotal = useMemo(() => foods.reduce((sum, item) => sum + item.price * item.quantity, 0), [foods]);
-  const total = drinksTotal + foodsTotal;
+  const drinkTotals = useMemo(() => summarize(drinks), [drinks]);
+  const foodTotals = useMemo(() => summarize(foods), [foods]);
+  const total = drinkTotals.total + foodTotals.total;
   const equalShare = state.guests.length > 0 ? total / state.guests.length : 0;
 
-  const totalsByGuest = useMemo(
-    () =>
-      state.guests.map((guest) => {
-        const guestItems = state.items.filter((item) => item.id.startsWith(guest.id));
-        const guestTotal = guestItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
-
-        return { guest, total: guestTotal };
-      }),
-    [state.guests, state.items]
-  );
-
-  function addTile(tile: OrderTile, category: Category): void {
+  function addTile(tile: Tile, category: Category): void {
     setState((current) => {
-      const existing = current.items.find((item) => item.name === tile.name && item.category === category);
+      const existing = current.items.find((item) => item.category === category && item.name === tile.name);
 
       if (existing) {
         return {
@@ -184,7 +188,7 @@ function App() {
     });
   }
 
-  function adjustItem(itemId: string, delta: number): void {
+  function changeQuantity(itemId: string, delta: number): void {
     setState((current) => ({
       ...current,
       items: current.items
@@ -207,18 +211,6 @@ function App() {
     }));
   }
 
-  function syncActivePanel(): void {
-    const track = swipeTrackRef.current;
-
-    if (!track) {
-      return;
-    }
-
-    const activePanel = track.scrollLeft > track.clientWidth / 2 ? 'foods' : 'drinks';
-
-    setState((current) => (current.activePanel === activePanel ? current : { ...current, activePanel }));
-  }
-
   function updateGuestName(guestId: string, name: string): void {
     setState((current) => ({
       ...current,
@@ -226,89 +218,66 @@ function App() {
     }));
   }
 
-  function summarizeDrinksFoods(items: OrderItem[]) {
-    return items.reduce(
-      (summary, item) => {
-        const lineTotal = item.price * item.quantity;
+  function syncActivePanel(): void {
+    const track = trackRef.current;
 
-        if (item.category === 'drinks') {
-          summary.drinks += lineTotal;
-        } else {
-          summary.foods += lineTotal;
-        }
+    if (!track) {
+      return;
+    }
 
-        summary.total += lineTotal;
-        return summary;
-      },
-      { drinks: 0, foods: 0, total: 0 }
-    );
+    const index = Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
+    const nextPanel: Panel = index <= 0 ? 'drinks' : index === 1 ? 'foods' : 'payment';
+
+    setState((current) => (current.activePanel === nextPanel ? current : { ...current, activePanel: nextPanel }));
   }
 
-  const drinkSummary = summarizeDrinksFoods(drinks);
-  const foodSummary = summarizeDrinksFoods(foods);
+  function goToPanel(panel: Panel): void {
+    const track = trackRef.current;
+
+    if (!track) {
+      setState((current) => (current.activePanel === panel ? current : { ...current, activePanel: panel }));
+      return;
+    }
+
+    const index = panel === 'drinks' ? 0 : panel === 'foods' ? 1 : 2;
+    track.scrollTo({ left: track.clientWidth * index, behavior: 'smooth' });
+    setState((current) => (current.activePanel === panel ? current : { ...current, activePanel: panel }));
+  }
 
   return (
     <main className="app-shell">
-      <header className="hero-card">
-        <div className="hero-copy">
+      <header className="top-bar">
+        <div>
           <p className="eyebrow">Dorffest</p>
-          <h1>Swipe between drinks and foods. Tap tiles to add orders fast.</h1>
-          <p className="hero-text">
-            Built for mobile waiters on Android and iPhone. Use the horizontal swipe to switch sections, keep subtotals visible, and optionally split the bill later.
-          </p>
-
-          <div className="hero-meta">
-            <span>{state.tableName}</span>
-            <span>{state.guests.length} guests</span>
-            <span>{state.items.length} items</span>
-          </div>
+          <h1>Swipe left and right between drinks, foods, and payment.</h1>
         </div>
-
-        <div className="stats-grid">
-          <article>
-            <strong>{formatMoney(total)}</strong>
-            <span>Total</span>
-          </article>
-          <article>
-            <strong>{formatMoney(drinkSummary.drinks)}</strong>
-            <span>Drinks</span>
-          </article>
-          <article>
-            <strong>{formatMoney(foodSummary.foods)}</strong>
-            <span>Foods</span>
-          </article>
-          <article>
-            <strong>{formatMoney(equalShare)}</strong>
-            <span>Equal share</span>
-          </article>
-        </div>
-      </header>
-
-      <section className="table-bar">
-        <label>
-          Table name
+        <label className="table-field">
+          Table
           <input value={state.tableName} onChange={(event) => setState((current) => ({ ...current, tableName: event.target.value }))} />
         </label>
+      </header>
 
-        <button type="button" className={splitOpen ? 'tab active' : 'tab'} onClick={() => setSplitOpen((current) => !current)}>
-          {splitOpen ? 'Hide bill split' : 'Show bill split'}
+      <nav className="page-tabs" aria-label="Order sections">
+        <button type="button" className={state.activePanel === 'drinks' ? 'tab active' : 'tab'} onClick={() => goToPanel('drinks')}>
+          Drinks
         </button>
-      </section>
+        <button type="button" className={state.activePanel === 'foods' ? 'tab active' : 'tab'} onClick={() => goToPanel('foods')}>
+          Foods
+        </button>
+        <button type="button" className={state.activePanel === 'payment' ? 'tab active' : 'tab'} onClick={() => goToPanel('payment')}>
+          Payment
+        </button>
+      </nav>
 
-      <section className="swipe-shell" aria-label="Order panels">
-        <div className="swipe-hint">
-          <span className={state.activePanel === 'drinks' ? 'active' : ''}>Drinks</span>
-          <span className={state.activePanel === 'foods' ? 'active' : ''}>Foods</span>
-        </div>
-
-        <div className="swipe-track" ref={swipeTrackRef} onScroll={syncActivePanel}>
-          <section className="panel panel-drinks" onClick={() => setState((current) => ({ ...current, activePanel: 'drinks' }))}>
+      <section className="swipe-shell" aria-label="Swipeable order pages">
+        <div className="swipe-track" ref={trackRef} onScroll={syncActivePanel}>
+          <section className="panel panel-drinks">
             <div className="panel-head">
               <div>
                 <p className="eyebrow">Drinks</p>
-                <h2>Fast tiles</h2>
+                <h2>Fast tile order</h2>
               </div>
-              <strong>{formatMoney(drinkSummary.drinks)}</strong>
+              <strong>{formatMoney(drinkTotals.drinks)}</strong>
             </div>
 
             <div className="tile-grid">
@@ -334,10 +303,10 @@ function App() {
                       </span>
                     </div>
                     <div className="row-actions">
-                      <button type="button" onClick={() => adjustItem(item.id, -1)}>
+                      <button type="button" onClick={() => changeQuantity(item.id, -1)}>
                         -
                       </button>
-                      <button type="button" onClick={() => adjustItem(item.id, 1)}>
+                      <button type="button" onClick={() => changeQuantity(item.id, 1)}>
                         +
                       </button>
                       <button type="button" className="danger" onClick={() => removeItem(item.id)}>
@@ -350,13 +319,13 @@ function App() {
             </div>
           </section>
 
-          <section className="panel panel-foods" onClick={() => setState((current) => ({ ...current, activePanel: 'foods' }))}>
+          <section className="panel panel-foods">
             <div className="panel-head">
               <div>
                 <p className="eyebrow">Foods</p>
-                <h2>Fast tiles</h2>
+                <h2>Fast tile order</h2>
               </div>
-              <strong>{formatMoney(foodSummary.foods)}</strong>
+              <strong>{formatMoney(foodTotals.foods)}</strong>
             </div>
 
             <div className="tile-grid">
@@ -382,10 +351,10 @@ function App() {
                       </span>
                     </div>
                     <div className="row-actions">
-                      <button type="button" onClick={() => adjustItem(item.id, -1)}>
+                      <button type="button" onClick={() => changeQuantity(item.id, -1)}>
                         -
                       </button>
-                      <button type="button" onClick={() => adjustItem(item.id, 1)}>
+                      <button type="button" onClick={() => changeQuantity(item.id, 1)}>
                         +
                       </button>
                       <button type="button" className="danger" onClick={() => removeItem(item.id)}>
@@ -397,56 +366,57 @@ function App() {
               )}
             </div>
           </section>
+
+          <section className="panel panel-payment">
+            <div className="panel-head">
+              <div>
+                <p className="eyebrow">Payment</p>
+                <h2>Overview and bill split</h2>
+              </div>
+              <strong>{formatMoney(total)}</strong>
+            </div>
+
+            <div className="split-summary-grid">
+              <article>
+                <strong>{formatMoney(drinkTotals.drinks)}</strong>
+                <span>Drinks</span>
+              </article>
+              <article>
+                <strong>{formatMoney(foodTotals.foods)}</strong>
+                <span>Foods</span>
+              </article>
+              <article>
+                <strong>{formatMoney(equalShare)}</strong>
+                <span>Equal share</span>
+              </article>
+            </div>
+
+            <div className="split-toolbar">
+              <button type="button" className={state.splitMode === 'guest' ? 'tab active' : 'tab'} onClick={() => setState((current) => ({ ...current, splitMode: 'guest' }))}>
+                By guest
+              </button>
+              <button type="button" className={state.splitMode === 'equal' ? 'tab active' : 'tab'} onClick={() => setState((current) => ({ ...current, splitMode: 'equal' }))}>
+                Equal split
+              </button>
+              <button type="button" className="tab" onClick={addGuest}>
+                Add guest
+              </button>
+            </div>
+
+            <div className="guest-grid">
+              {state.guests.map((guest, index) => (
+                <article className="guest-card" key={guest.id}>
+                  <label>
+                    Guest {index + 1}
+                    <input value={guest.name} onChange={(event) => updateGuestName(guest.id, event.target.value)} />
+                  </label>
+                  <strong>{formatMoney(equalShare)}</strong>
+                </article>
+              ))}
+            </div>
+          </section>
         </div>
       </section>
-
-      {splitOpen ? (
-        <section className="split-card">
-          <div className="panel-head">
-            <div>
-              <p className="eyebrow">Bill split</p>
-              <h2>Secondary view</h2>
-            </div>
-            <strong>{formatMoney(total)}</strong>
-          </div>
-
-          <div className="split-summary-grid">
-            <article>
-              <strong>{formatMoney(equalShare)}</strong>
-              <span>Equal share</span>
-            </article>
-            <article>
-              <strong>{formatMoney(total)}</strong>
-              <span>Grand total</span>
-            </article>
-            <article>
-              <strong>{state.guests.length}</strong>
-              <span>Guests</span>
-            </article>
-          </div>
-
-          <div className="split-toolbar">
-            <button type="button" className={state.splitMode === 'guest' ? 'tab active' : 'tab'} onClick={() => setState((current) => ({ ...current, splitMode: 'guest' }))}>
-              By guest
-            </button>
-            <button type="button" className={state.splitMode === 'equal' ? 'tab active' : 'tab'} onClick={() => setState((current) => ({ ...current, splitMode: 'equal' }))}>
-              Equal split
-            </button>
-            <button type="button" className="tab" onClick={addGuest}>
-              Add guest
-            </button>
-          </div>
-
-          <div className="guest-grid">
-            {totalsByGuest.map(({ guest, total: guestTotal }) => (
-              <article key={guest.id} className="guest-card">
-                <input value={guest.name} onChange={(event) => updateGuestName(guest.id, event.target.value)} />
-                <strong>{formatMoney(state.splitMode === 'equal' ? equalShare : guestTotal)}</strong>
-              </article>
-            ))}
-          </div>
-        </section>
-      ) : null}
     </main>
   );
 }
