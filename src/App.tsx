@@ -1,87 +1,55 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactElement } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 type Category = 'drinks' | 'foods';
 type SplitMode = 'guest' | 'equal';
 
-interface Guest {
+interface OrderTile {
   id: string;
   name: string;
+  price: number;
+  icon: string;
 }
 
 interface OrderItem {
   id: string;
   category: Category;
   name: string;
+  price: number;
   quantity: number;
-  unitPrice: number;
-  guestId: string;
-  note: string;
-  createdAt: number;
 }
 
-interface OrderState {
+interface Guest {
+  id: string;
+  name: string;
+}
+
+interface AppState {
   tableName: string;
   splitMode: SplitMode;
   guests: Guest[];
   items: OrderItem[];
-}
-
-interface ItemDraft {
-  name: string;
-  quantity: string;
-  unitPrice: string;
-  guestId: string;
-  note: string;
-}
-
-interface CategoryPanelProps {
-  category: Category;
-  title: string;
-  subtitle: string;
-  items: OrderItem[];
-  subtotal: number;
-  draft: ItemDraft;
-  guests: Guest[];
-  onDraftChange: (category: Category, patch: Partial<ItemDraft>) => void;
-  onAddItem: (category: Category) => void;
-  onQuickAdd: (category: Category, name: string, unitPrice: number) => void;
-  onAdjustQuantity: (itemId: string, delta: number) => void;
-  onDeleteItem: (itemId: string) => void;
-  onGuestChange: (itemId: string, guestId: string) => void;
-}
-
-interface GuestPanelProps {
-  guests: Guest[];
-  splitMode: SplitMode;
-  equalShare: number;
-  totalsByGuest: Array<{
-    guest: Guest;
-    drinks: number;
-    foods: number;
-    total: number;
-    itemCount: number;
-  }>;
-  onSplitModeChange: (mode: SplitMode) => void;
-  onGuestNameChange: (guestId: string, name: string) => void;
-  onAddGuest: (name: string) => void;
-  onRemoveGuest: (guestId: string) => void;
+  activePanel: Category;
 }
 
 const STORAGE_KEY = 'dorffest:state';
 const currencyFormatter = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'EUR' });
 
-const drinkPresets = [
-  { name: 'Water', unitPrice: 2 },
-  { name: 'Sparkling water', unitPrice: 2.5 },
-  { name: 'Lemonade', unitPrice: 3 },
-  { name: 'Beer', unitPrice: 4.5 }
+const drinkTiles: OrderTile[] = [
+  { id: 'water', name: 'Water', price: 2, icon: '💧' },
+  { id: 'sparkling-water', name: 'Sparkling Water', price: 2.5, icon: '🫧' },
+  { id: 'cola', name: 'Cola', price: 3, icon: '🥤' },
+  { id: 'lemonade', name: 'Lemonade', price: 3, icon: '🍋' },
+  { id: 'beer', name: 'Beer', price: 4.5, icon: '🍺' },
+  { id: 'wine', name: 'Wine', price: 5.5, icon: '🍷' }
 ];
 
-const foodPresets = [
-  { name: 'Pretzel', unitPrice: 3 },
-  { name: 'Fries', unitPrice: 5.5 },
-  { name: 'Bratwurst', unitPrice: 6.5 },
-  { name: 'Burger', unitPrice: 9 }
+const foodTiles: OrderTile[] = [
+  { id: 'pretzel', name: 'Pretzel', price: 3, icon: '🥨' },
+  { id: 'fries', name: 'Fries', price: 5.5, icon: '🍟' },
+  { id: 'bratwurst', name: 'Bratwurst', price: 6.5, icon: '🌭' },
+  { id: 'burger', name: 'Burger', price: 9, icon: '🍔' },
+  { id: 'schnitzel', name: 'Schnitzel', price: 12, icon: '🍽️' },
+  { id: 'salad', name: 'Salad', price: 7, icon: '🥗' }
 ];
 
 function createId(): string {
@@ -92,87 +60,69 @@ function createId(): string {
   return Math.random().toString(36).slice(2, 11);
 }
 
-function createGuest(name: string): Guest {
-  return {
-    id: createId(),
-    name: name.trim() || 'Guest'
-  };
-}
-
-function createOrderItem(category: Category, draft: ItemDraft): OrderItem | null {
-  const name = draft.name.trim();
-
-  if (!name) {
-    return null;
-  }
-
-  const quantity = Math.max(1, Math.floor(Number(draft.quantity) || 1));
-  const unitPrice = Math.max(0, Number(draft.unitPrice.replace(',', '.')) || 0);
-
-  return {
-    id: createId(),
-    category,
-    name,
-    quantity,
-    unitPrice,
-    guestId: draft.guestId,
-    note: draft.note.trim(),
-    createdAt: Date.now()
-  };
-}
-
 function formatMoney(value: number): string {
   return currencyFormatter.format(value);
 }
 
-function loadState(): OrderState | null {
+function loadState(): AppState {
   if (typeof window === 'undefined') {
-    return null;
+    return {
+      tableName: 'Table 1',
+      splitMode: 'guest',
+      guests: [{ id: createId(), name: 'Guest 1' }],
+      items: [],
+      activePanel: 'drinks'
+    };
   }
 
   const raw = window.localStorage.getItem(STORAGE_KEY);
 
   if (!raw) {
-    return null;
+    return {
+      tableName: 'Table 1',
+      splitMode: 'guest',
+      guests: [{ id: createId(), name: 'Guest 1' }],
+      items: [],
+      activePanel: 'drinks'
+    };
   }
 
   try {
-    const parsed = JSON.parse(raw) as Partial<OrderState>;
-
-    if (typeof parsed.tableName !== 'string' || !Array.isArray(parsed.guests) || !Array.isArray(parsed.items)) {
-      return null;
-    }
-
-    const guests = parsed.guests
-      .filter((guest): guest is Guest => typeof guest?.id === 'string' && typeof guest?.name === 'string')
-      .map((guest) => ({ id: guest.id, name: guest.name }));
-
-    const items = parsed.items
-      .filter(
-        (item): item is OrderItem =>
-          typeof item?.id === 'string' &&
-          (item.category === 'drinks' || item.category === 'foods') &&
-          typeof item.name === 'string' &&
-          typeof item.quantity === 'number' &&
-          typeof item.unitPrice === 'number' &&
-          typeof item.guestId === 'string' &&
-          typeof item.note === 'string' &&
-          typeof item.createdAt === 'number'
-      )
-      .map((item) => ({ ...item }));
+    const parsed = JSON.parse(raw) as Partial<AppState>;
+    const guests = Array.isArray(parsed.guests) && parsed.guests.length > 0
+      ? parsed.guests
+          .filter((guest): guest is Guest => typeof guest?.id === 'string' && typeof guest?.name === 'string')
+          .map((guest) => ({ id: guest.id, name: guest.name }))
+      : [{ id: createId(), name: 'Guest 1' }];
 
     return {
-      tableName: parsed.tableName,
+      tableName: typeof parsed.tableName === 'string' ? parsed.tableName : 'Table 1',
       splitMode: parsed.splitMode === 'equal' ? 'equal' : 'guest',
-      guests: guests.length > 0 ? guests : [createGuest('Guest 1')],
-      items
+      guests,
+      items: Array.isArray(parsed.items)
+        ? parsed.items.filter(
+            (item): item is OrderItem =>
+              typeof item?.id === 'string' &&
+              (item.category === 'drinks' || item.category === 'foods') &&
+              typeof item.name === 'string' &&
+              typeof item.price === 'number' &&
+              typeof item.quantity === 'number'
+          )
+        : [],
+      activePanel: parsed.activePanel === 'foods' ? 'foods' : 'drinks'
     };
   } catch {
-    return null;
+    return {
+      tableName: 'Table 1',
+      splitMode: 'guest',
+      guests: [{ id: createId(), name: 'Guest 1' }],
+      items: [],
+      activePanel: 'drinks'
+    };
   }
 }
 
-function saveState(state: OrderState): void {
+function saveState(state: AppState): void {
   if (typeof window === 'undefined') {
     return;
   }
@@ -180,505 +130,151 @@ function saveState(state: OrderState): void {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
-function normalizeDraft(draft: ItemDraft): ItemDraft {
-  return {
-    ...draft,
-    guestId: draft.guestId || ''
-  };
-}
-
-function getDefaultState(): OrderState {
-  const firstGuest = createGuest('Guest 1');
-
-  return {
-    tableName: 'Table 1',
-    splitMode: 'guest',
-    guests: [firstGuest],
-    items: []
-  };
-}
-
-function summarizeItems(items: OrderItem[], guestId?: string) {
-  return items.reduce(
-    (summary, item) => {
-      if (guestId && item.guestId !== guestId) {
-        return summary;
-      }
-
-      const lineTotal = item.quantity * item.unitPrice;
-
-      if (item.category === 'drinks') {
-        summary.drinks += lineTotal;
-      } else {
-        summary.foods += lineTotal;
-      }
-
-      summary.total += lineTotal;
-      summary.itemCount += item.quantity;
-      return summary;
-    },
-    { drinks: 0, foods: 0, total: 0, itemCount: 0 }
-  );
-}
-
-function CategoryPanel({
-  category,
-  title,
-  subtitle,
-  items,
-  subtotal,
-  draft,
-  guests,
-  onDraftChange,
-  onAddItem,
-  onQuickAdd,
-  onAdjustQuantity,
-  onDeleteItem,
-  onGuestChange
-}: CategoryPanelProps): ReactElement {
-  const presets = category === 'drinks' ? drinkPresets : foodPresets;
-
-  function submitDraft(event: FormEvent<HTMLFormElement>): void {
-    event.preventDefault();
-    onAddItem(category);
-  }
-
-  return (
-    <section className={`category-card category-card--${category}`}>
-      <div className="card-heading inline">
-        <div>
-          <p className="eyebrow">{title}</p>
-          <h2>{subtitle}</h2>
-          <p>
-            {items.length} items in this section · subtotal {formatMoney(subtotal)}
-          </p>
-        </div>
-        <strong>{formatMoney(subtotal)}</strong>
-      </div>
-
-      <div className="preset-row" aria-label={`${title} presets`}>
-        {presets.map((preset) => (
-          <button key={preset.name} className="preset-chip" type="button" onClick={() => onQuickAdd(category, preset.name, preset.unitPrice)}>
-            {preset.name}
-            <span>{formatMoney(preset.unitPrice)}</span>
-          </button>
-        ))}
-      </div>
-
-      <form className="entry-form" onSubmit={submitDraft}>
-        <div className="two-column">
-          <label>
-            Item
-            <input value={draft.name} onChange={(event) => onDraftChange(category, { name: event.target.value })} placeholder={`Add ${category.slice(0, -1)}`} />
-          </label>
-          <label>
-            Price
-            <input value={draft.unitPrice} onChange={(event) => onDraftChange(category, { unitPrice: event.target.value })} min="0" step="0.01" inputMode="decimal" type="number" placeholder="0.00" />
-          </label>
-        </div>
-
-        <div className="two-column">
-          <label>
-            Quantity
-            <input value={draft.quantity} onChange={(event) => onDraftChange(category, { quantity: event.target.value })} min="1" step="1" inputMode="numeric" type="number" />
-          </label>
-          <label>
-            Assign to
-            <select value={draft.guestId} onChange={(event) => onDraftChange(category, { guestId: event.target.value })}>
-              {guests.map((guest) => (
-                <option key={guest.id} value={guest.id}>
-                  {guest.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-
-        <label>
-          Note
-          <textarea value={draft.note} onChange={(event) => onDraftChange(category, { note: event.target.value })} rows={3} placeholder="Extra ice, no onion, etc." />
-        </label>
-
-        <button type="submit">Add {title.toLowerCase()}</button>
-      </form>
-
-      <div className="item-list">
-        {items.length > 0 ? (
-          items.map((item) => (
-            <article key={item.id} className="order-item">
-              <header>
-                <div>
-                  <span className="entry-kind">{item.category}</span>
-                  <h3>{item.name}</h3>
-                  {item.note ? <p className="entry-details">{item.note}</p> : null}
-                </div>
-                <strong>{formatMoney(item.quantity * item.unitPrice)}</strong>
-              </header>
-
-              <footer>
-                <div className="item-meta">
-                  <span>
-                    {item.quantity} x {formatMoney(item.unitPrice)}
-                  </span>
-                  <span>{item.quantity === 1 ? 'Single item' : 'Multiple items'}</span>
-                </div>
-
-                <div className="order-actions">
-                  <label className="compact-field">
-                    Guest
-                    <select value={item.guestId} onChange={(event) => onGuestChange(item.id, event.target.value)}>
-                      {guests.map((guest) => (
-                        <option key={guest.id} value={guest.id}>
-                          {guest.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <div className="stepper" aria-label="Quantity controls">
-                    <button type="button" onClick={() => onAdjustQuantity(item.id, -1)}>
-                      -
-                    </button>
-                    <span>{item.quantity}</span>
-                    <button type="button" onClick={() => onAdjustQuantity(item.id, 1)}>
-                      +
-                    </button>
-                  </div>
-
-                  <button className="danger" type="button" onClick={() => onDeleteItem(item.id)}>
-                    Remove
-                  </button>
-                </div>
-              </footer>
-            </article>
-          ))
-        ) : (
-          <div className="empty-state">
-            <strong>No {title.toLowerCase()} yet.</strong>
-            <span>Use a preset chip or add a custom item to start the table.</span>
-          </div>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function GuestPanel({
-  guests,
-  splitMode,
-  equalShare,
-  totalsByGuest,
-  onSplitModeChange,
-  onGuestNameChange,
-  onAddGuest,
-  onRemoveGuest
-}: GuestPanelProps): ReactElement {
-  const [guestNameDraft, setGuestNameDraft] = useState('');
-
-  function submitGuest(event: FormEvent<HTMLFormElement>): void {
-    event.preventDefault();
-
-    if (!guestNameDraft.trim()) {
-      return;
-    }
-
-    onAddGuest(guestNameDraft);
-    setGuestNameDraft('');
-  }
-
-  return (
-    <section className="split-card">
-      <div className="card-heading inline">
-        <div>
-          <p className="eyebrow">Bill split</p>
-          <h2>Track each guest's share</h2>
-          <p>Switch between guest-based totals and an equal split for a fast check.</p>
-        </div>
-
-        <div className="split-toggle" role="tablist" aria-label="Split mode">
-          <button type="button" className={splitMode === 'guest' ? 'tab active' : 'tab'} onClick={() => onSplitModeChange('guest')} aria-pressed={splitMode === 'guest'}>
-            By guest
-          </button>
-          <button type="button" className={splitMode === 'equal' ? 'tab active' : 'tab'} onClick={() => onSplitModeChange('equal')} aria-pressed={splitMode === 'equal'}>
-            Equal split
-          </button>
-        </div>
-      </div>
-
-      <div className="split-summary-grid">
-        <article>
-          <strong>{formatMoney(equalShare * guests.length)}</strong>
-          <span>Grand total</span>
-        </article>
-        <article>
-          <strong>{formatMoney(equalShare)}</strong>
-          <span>Equal share</span>
-        </article>
-        <article>
-          <strong>{guests.length}</strong>
-          <span>Guests</span>
-        </article>
-      </div>
-
-      <form className="guest-form" onSubmit={submitGuest}>
-        <label>
-          Add person
-          <input value={guestNameDraft} onChange={(event) => setGuestNameDraft(event.target.value)} placeholder="Guest name" />
-        </label>
-        <button type="submit">Add guest</button>
-      </form>
-
-      <div className="guest-grid">
-        {totalsByGuest.map(({ guest, drinks, foods, total, itemCount }, index) => (
-          <article className="guest-card" key={guest.id}>
-            <header>
-              <label>
-                Person {index + 1}
-                <input value={guest.name} onChange={(event) => onGuestNameChange(guest.id, event.target.value)} />
-              </label>
-              <button className="ghost" type="button" onClick={() => onRemoveGuest(guest.id)} disabled={guests.length === 1}>
-                Remove
-              </button>
-            </header>
-
-            <div className="guest-total">
-              <strong>{splitMode === 'equal' ? formatMoney(equalShare) : formatMoney(total)}</strong>
-              <span>{splitMode === 'equal' ? 'Equal share' : 'Assigned total'}</span>
-            </div>
-
-            <div className="guest-breakdown">
-              <div>
-                <span>Drinks</span>
-                <strong>{formatMoney(drinks)}</strong>
-              </div>
-              <div>
-                <span>Foods</span>
-                <strong>{formatMoney(foods)}</strong>
-              </div>
-              <div>
-                <span>Items</span>
-                <strong>{itemCount}</strong>
-              </div>
-            </div>
-          </article>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 function App() {
-  const [state, setState] = useState<OrderState>(() => loadState() ?? getDefaultState());
-  const [drafts, setDrafts] = useState<Record<Category, ItemDraft>>(() => ({
-    drinks: {
-      name: '',
-      quantity: '1',
-      unitPrice: '0.00',
-      guestId: '',
-      note: ''
-    },
-    foods: {
-      name: '',
-      quantity: '1',
-      unitPrice: '0.00',
-      guestId: '',
-      note: ''
-    }
-  }));
+  const [state, setState] = useState<AppState>(() => loadState());
+  const [splitOpen, setSplitOpen] = useState(false);
+  const swipeTrackRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     saveState(state);
   }, [state]);
 
-  useEffect(() => {
-    setDrafts((current) => {
-      const firstGuestId = state.guests[0]?.id ?? '';
-
-      return {
-        drinks: {
-          ...normalizeDraft(current.drinks),
-          guestId: state.guests.some((guest) => guest.id === current.drinks.guestId) ? current.drinks.guestId : firstGuestId
-        },
-        foods: {
-          ...normalizeDraft(current.foods),
-          guestId: state.guests.some((guest) => guest.id === current.foods.guestId) ? current.foods.guestId : firstGuestId
-        }
-      };
-    });
-  }, [state.guests]);
-
-  const totals = useMemo(() => summarizeItems(state.items), [state.items]);
   const drinks = useMemo(() => state.items.filter((item) => item.category === 'drinks'), [state.items]);
   const foods = useMemo(() => state.items.filter((item) => item.category === 'foods'), [state.items]);
-  const drinksTotal = useMemo(() => summarizeItems(drinks).total, [drinks]);
-  const foodsTotal = useMemo(() => summarizeItems(foods).total, [foods]);
-  const equalShare = state.guests.length > 0 ? totals.total / state.guests.length : 0;
+  const drinksTotal = useMemo(() => drinks.reduce((sum, item) => sum + item.price * item.quantity, 0), [drinks]);
+  const foodsTotal = useMemo(() => foods.reduce((sum, item) => sum + item.price * item.quantity, 0), [foods]);
+  const total = drinksTotal + foodsTotal;
+  const equalShare = state.guests.length > 0 ? total / state.guests.length : 0;
 
   const totalsByGuest = useMemo(
     () =>
       state.guests.map((guest) => {
-        const summary = summarizeItems(state.items, guest.id);
+        const guestItems = state.items.filter((item) => item.id.startsWith(guest.id));
+        const guestTotal = guestItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
-        return {
-          guest,
-          drinks: summary.drinks,
-          foods: summary.foods,
-          total: summary.total,
-          itemCount: summary.itemCount
-        };
+        return { guest, total: guestTotal };
       }),
     [state.guests, state.items]
   );
 
-  const guestCount = state.guests.length;
+  function addTile(tile: OrderTile, category: Category): void {
+    setState((current) => {
+      const existing = current.items.find((item) => item.name === tile.name && item.category === category);
 
-  function updateDraft(category: Category, patch: Partial<ItemDraft>): void {
-    setDrafts((current) => ({
-      ...current,
-      [category]: {
-        ...current[category],
-        ...patch
+      if (existing) {
+        return {
+          ...current,
+          items: current.items.map((item) => (item.id === existing.id ? { ...item, quantity: item.quantity + 1 } : item))
+        };
       }
-    }));
+
+      return {
+        ...current,
+        items: [
+          {
+            id: createId(),
+            category,
+            name: tile.name,
+            price: tile.price,
+            quantity: 1
+          },
+          ...current.items
+        ]
+      };
+    });
   }
 
-  function addItem(category: Category): void {
-    const nextItem = createOrderItem(category, drafts[category]);
-
-    if (!nextItem) {
-      return;
-    }
-
-    const fallbackGuestId = state.guests[0]?.id ?? '';
-
+  function adjustItem(itemId: string, delta: number): void {
     setState((current) => ({
       ...current,
-      items: [nextItem, ...current.items]
-    }));
-
-    setDrafts((current) => ({
-      ...current,
-      [category]: {
-        name: '',
-        quantity: '1',
-        unitPrice: '0.00',
-        guestId: current[category].guestId || fallbackGuestId,
-        note: ''
-      }
+      items: current.items
+        .map((item) => (item.id === itemId ? { ...item, quantity: item.quantity + delta } : item))
+        .filter((item) => item.quantity > 0)
     }));
   }
 
-  function addQuickItem(category: Category, name: string, unitPrice: number): void {
-    const guestId = drafts[category].guestId || state.guests[0]?.id || '';
-
-    setState((current) => ({
-      ...current,
-      items: [
-        {
-          id: createId(),
-          category,
-          name,
-          quantity: 1,
-          unitPrice,
-          guestId,
-          note: '',
-          createdAt: Date.now()
-        },
-        ...current.items
-      ]
-    }));
-  }
-
-  function adjustQuantity(itemId: string, delta: number): void {
-    setState((current) => ({
-      ...current,
-      items: current.items.map((item) => (item.id === itemId ? { ...item, quantity: Math.max(1, item.quantity + delta) } : item))
-    }));
-  }
-
-  function deleteItem(itemId: string): void {
+  function removeItem(itemId: string): void {
     setState((current) => ({
       ...current,
       items: current.items.filter((item) => item.id !== itemId)
     }));
   }
 
-  function changeItemGuest(itemId: string, guestId: string): void {
+  function addGuest(): void {
     setState((current) => ({
       ...current,
-      items: current.items.map((item) => (item.id === itemId ? { ...item, guestId } : item))
+      guests: [...current.guests, { id: createId(), name: `Guest ${current.guests.length + 1}` }]
     }));
   }
 
-  function changeGuestName(guestId: string, name: string): void {
+  function syncActivePanel(): void {
+    const track = swipeTrackRef.current;
+
+    if (!track) {
+      return;
+    }
+
+    const activePanel = track.scrollLeft > track.clientWidth / 2 ? 'foods' : 'drinks';
+
+    setState((current) => (current.activePanel === activePanel ? current : { ...current, activePanel }));
+  }
+
+  function updateGuestName(guestId: string, name: string): void {
     setState((current) => ({
       ...current,
       guests: current.guests.map((guest) => (guest.id === guestId ? { ...guest, name } : guest))
     }));
   }
 
-  function addGuest(name: string): void {
-    const guest = createGuest(name);
+  function summarizeDrinksFoods(items: OrderItem[]) {
+    return items.reduce(
+      (summary, item) => {
+        const lineTotal = item.price * item.quantity;
 
-    setState((current) => ({
-      ...current,
-      guests: [...current.guests, guest]
-    }));
+        if (item.category === 'drinks') {
+          summary.drinks += lineTotal;
+        } else {
+          summary.foods += lineTotal;
+        }
+
+        summary.total += lineTotal;
+        return summary;
+      },
+      { drinks: 0, foods: 0, total: 0 }
+    );
   }
 
-  function removeGuest(guestId: string): void {
-    setState((current) => {
-      if (current.guests.length === 1) {
-        return current;
-      }
-
-      const fallbackGuestId = current.guests.find((guest) => guest.id !== guestId)?.id ?? current.guests[0].id;
-
-      return {
-        ...current,
-        guests: current.guests.filter((guest) => guest.id !== guestId),
-        items: current.items.map((item) => (item.guestId === guestId ? { ...item, guestId: fallbackGuestId } : item))
-      };
-    });
-  }
-
-  const totalItems = state.items.length;
+  const drinkSummary = summarizeDrinksFoods(drinks);
+  const foodSummary = summarizeDrinksFoods(foods);
 
   return (
     <main className="app-shell">
-      <section className="hero-card">
+      <header className="hero-card">
         <div className="hero-copy">
-          <p className="eyebrow">Dorffest PWA</p>
-          <h1>Fast table orders with drinks, food, and bill splits on mobile.</h1>
+          <p className="eyebrow">Dorffest</p>
+          <h1>Swipe between drinks and foods. Tap tiles to add orders fast.</h1>
           <p className="hero-text">
-            Built for Android and iPhone use in the browser or as an installed PWA. Start a table, tap quick items, and keep the subtotal visible while you work.
+            Built for mobile waiters on Android and iPhone. Use the horizontal swipe to switch sections, keep subtotals visible, and optionally split the bill later.
           </p>
 
-          <div className="hero-controls">
-            <label className="table-field">
-              Table
-              <input value={state.tableName} onChange={(event) => setState((current) => ({ ...current, tableName: event.target.value }))} placeholder="Table 1" />
-            </label>
-
-            <div className="hero-meta">
-              <span>Offline ready</span>
-              <span>{guestCount} guests</span>
-              <span>{totalItems} items</span>
-            </div>
+          <div className="hero-meta">
+            <span>{state.tableName}</span>
+            <span>{state.guests.length} guests</span>
+            <span>{state.items.length} items</span>
           </div>
         </div>
 
         <div className="stats-grid">
           <article>
-            <strong>{formatMoney(totals.total)}</strong>
+            <strong>{formatMoney(total)}</strong>
             <span>Total</span>
           </article>
           <article>
-            <strong>{formatMoney(drinksTotal)}</strong>
+            <strong>{formatMoney(drinkSummary.drinks)}</strong>
             <span>Drinks</span>
           </article>
           <article>
-            <strong>{formatMoney(foodsTotal)}</strong>
+            <strong>{formatMoney(foodSummary.foods)}</strong>
             <span>Foods</span>
           </article>
           <article>
@@ -686,52 +282,171 @@ function App() {
             <span>Equal share</span>
           </article>
         </div>
+      </header>
+
+      <section className="table-bar">
+        <label>
+          Table name
+          <input value={state.tableName} onChange={(event) => setState((current) => ({ ...current, tableName: event.target.value }))} />
+        </label>
+
+        <button type="button" className={splitOpen ? 'tab active' : 'tab'} onClick={() => setSplitOpen((current) => !current)}>
+          {splitOpen ? 'Hide bill split' : 'Show bill split'}
+        </button>
       </section>
 
-      <section className="workspace-grid">
-        <CategoryPanel
-          category="drinks"
-          title="Drinks"
-          subtitle="Drinks section"
-          items={drinks}
-          subtotal={drinksTotal}
-          draft={drafts.drinks}
-          guests={state.guests}
-          onDraftChange={updateDraft}
-          onAddItem={addItem}
-          onQuickAdd={addQuickItem}
-          onAdjustQuantity={adjustQuantity}
-          onDeleteItem={deleteItem}
-          onGuestChange={changeItemGuest}
-        />
+      <section className="swipe-shell" aria-label="Order panels">
+        <div className="swipe-hint">
+          <span className={state.activePanel === 'drinks' ? 'active' : ''}>Drinks</span>
+          <span className={state.activePanel === 'foods' ? 'active' : ''}>Foods</span>
+        </div>
 
-        <CategoryPanel
-          category="foods"
-          title="Foods"
-          subtitle="Food section"
-          items={foods}
-          subtotal={foodsTotal}
-          draft={drafts.foods}
-          guests={state.guests}
-          onDraftChange={updateDraft}
-          onAddItem={addItem}
-          onQuickAdd={addQuickItem}
-          onAdjustQuantity={adjustQuantity}
-          onDeleteItem={deleteItem}
-          onGuestChange={changeItemGuest}
-        />
+        <div className="swipe-track" ref={swipeTrackRef} onScroll={syncActivePanel}>
+          <section className="panel panel-drinks" onClick={() => setState((current) => ({ ...current, activePanel: 'drinks' }))}>
+            <div className="panel-head">
+              <div>
+                <p className="eyebrow">Drinks</p>
+                <h2>Fast tiles</h2>
+              </div>
+              <strong>{formatMoney(drinkSummary.drinks)}</strong>
+            </div>
+
+            <div className="tile-grid">
+              {drinkTiles.map((tile) => (
+                <button key={tile.id} type="button" className="order-tile" onClick={() => addTile(tile, 'drinks')}>
+                  <span className="tile-icon">{tile.icon}</span>
+                  <strong>{tile.name}</strong>
+                  <span>{formatMoney(tile.price)}</span>
+                </button>
+              ))}
+            </div>
+
+            <div className="order-list">
+              {drinks.length === 0 ? (
+                <p className="empty-state">No drinks added yet.</p>
+              ) : (
+                drinks.map((item) => (
+                  <article key={item.id} className="order-row">
+                    <div>
+                      <strong>{item.name}</strong>
+                      <span>
+                        {item.quantity} x {formatMoney(item.price)}
+                      </span>
+                    </div>
+                    <div className="row-actions">
+                      <button type="button" onClick={() => adjustItem(item.id, -1)}>
+                        -
+                      </button>
+                      <button type="button" onClick={() => adjustItem(item.id, 1)}>
+                        +
+                      </button>
+                      <button type="button" className="danger" onClick={() => removeItem(item.id)}>
+                        Remove
+                      </button>
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
+          </section>
+
+          <section className="panel panel-foods" onClick={() => setState((current) => ({ ...current, activePanel: 'foods' }))}>
+            <div className="panel-head">
+              <div>
+                <p className="eyebrow">Foods</p>
+                <h2>Fast tiles</h2>
+              </div>
+              <strong>{formatMoney(foodSummary.foods)}</strong>
+            </div>
+
+            <div className="tile-grid">
+              {foodTiles.map((tile) => (
+                <button key={tile.id} type="button" className="order-tile" onClick={() => addTile(tile, 'foods')}>
+                  <span className="tile-icon">{tile.icon}</span>
+                  <strong>{tile.name}</strong>
+                  <span>{formatMoney(tile.price)}</span>
+                </button>
+              ))}
+            </div>
+
+            <div className="order-list">
+              {foods.length === 0 ? (
+                <p className="empty-state">No foods added yet.</p>
+              ) : (
+                foods.map((item) => (
+                  <article key={item.id} className="order-row">
+                    <div>
+                      <strong>{item.name}</strong>
+                      <span>
+                        {item.quantity} x {formatMoney(item.price)}
+                      </span>
+                    </div>
+                    <div className="row-actions">
+                      <button type="button" onClick={() => adjustItem(item.id, -1)}>
+                        -
+                      </button>
+                      <button type="button" onClick={() => adjustItem(item.id, 1)}>
+                        +
+                      </button>
+                      <button type="button" className="danger" onClick={() => removeItem(item.id)}>
+                        Remove
+                      </button>
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
+          </section>
+        </div>
       </section>
 
-      <GuestPanel
-        guests={state.guests}
-        splitMode={state.splitMode}
-        equalShare={equalShare}
-        totalsByGuest={totalsByGuest}
-        onSplitModeChange={(mode) => setState((current) => ({ ...current, splitMode: mode }))}
-        onGuestNameChange={changeGuestName}
-        onAddGuest={addGuest}
-        onRemoveGuest={removeGuest}
-      />
+      {splitOpen ? (
+        <section className="split-card">
+          <div className="panel-head">
+            <div>
+              <p className="eyebrow">Bill split</p>
+              <h2>Secondary view</h2>
+            </div>
+            <strong>{formatMoney(total)}</strong>
+          </div>
+
+          <div className="split-summary-grid">
+            <article>
+              <strong>{formatMoney(equalShare)}</strong>
+              <span>Equal share</span>
+            </article>
+            <article>
+              <strong>{formatMoney(total)}</strong>
+              <span>Grand total</span>
+            </article>
+            <article>
+              <strong>{state.guests.length}</strong>
+              <span>Guests</span>
+            </article>
+          </div>
+
+          <div className="split-toolbar">
+            <button type="button" className={state.splitMode === 'guest' ? 'tab active' : 'tab'} onClick={() => setState((current) => ({ ...current, splitMode: 'guest' }))}>
+              By guest
+            </button>
+            <button type="button" className={state.splitMode === 'equal' ? 'tab active' : 'tab'} onClick={() => setState((current) => ({ ...current, splitMode: 'equal' }))}>
+              Equal split
+            </button>
+            <button type="button" className="tab" onClick={addGuest}>
+              Add guest
+            </button>
+          </div>
+
+          <div className="guest-grid">
+            {totalsByGuest.map(({ guest, total: guestTotal }) => (
+              <article key={guest.id} className="guest-card">
+                <input value={guest.name} onChange={(event) => updateGuestName(guest.id, event.target.value)} />
+                <strong>{formatMoney(state.splitMode === 'equal' ? equalShare : guestTotal)}</strong>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
     </main>
   );
 }
