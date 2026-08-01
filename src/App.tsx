@@ -288,7 +288,7 @@ function App() {
               <strong>{formatMoney(drinkTotals.drinks)}</strong>
             </div>
 
-            <div className="tile-grid">
+            <div className="tile-grid tile-grid-drinks">
               {drinkTiles.map((tile) => (
                 <button key={tile.id} type="button" className="order-tile" onClick={() => addTile(tile, 'drinks')}>
                   <span className="tile-icon">{tile.icon}</span>

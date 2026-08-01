@@ -196,6 +196,10 @@ button:hover {
   gap: 12px;
 }
 
+.tile-grid-drinks {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .order-tile {
   display: grid;
   gap: 8px;
@@ -321,6 +325,10 @@ button:hover {
   }
 
   .tile-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .tile-grid-drinks {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -634,6 +642,10 @@ button:hover {
   .stats-grid,
   .guest-grid,
   .tile-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .tile-grid-drinks {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
