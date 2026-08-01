@@ -27,6 +27,14 @@ interface OrderItem {
   sideDish?: string;
 }
 
+interface PaymentLine {
+  key: string;
+  sourceId: string;
+  category: Category;
+  name: string;
+  price: number;
+}
+
 interface Guest {
   id: string;
   name: string;
@@ -176,12 +184,25 @@ function formatDishName(mainDish: string, sideDish?: string): string {
   return sideDish ? `${mainDish} + ${sideDish}` : mainDish;
 }
 
+function getPaymentLines(items: OrderItem[]): PaymentLine[] {
+  return items.flatMap((item) =>
+    Array.from({ length: item.quantity }, (_, index) => ({
+      key: `${item.id}:${index}`,
+      sourceId: item.id,
+      category: item.category,
+      name: item.name,
+      price: item.price
+    }))
+  );
+}
+
 function App() {
   const [state, setState] = useState<AppState>(() => loadState());
   const trackRef = useRef<HTMLDivElement | null>(null);
   const [otherFoodTitle, setOtherFoodTitle] = useState('');
   const [otherFoodPrice, setOtherFoodPrice] = useState('0,00');
   const [pendingMainDish, setPendingMainDish] = useState<Tile | null>(null);
+  const [selectedPaymentLines, setSelectedPaymentLines] = useState<string[]>([]);
 
   useEffect(() => {
     saveState(state);
@@ -189,10 +210,16 @@ function App() {
 
   const drinks = useMemo(() => state.items.filter((item) => item.category === 'drinks'), [state.items]);
   const foods = useMemo(() => state.items.filter((item) => item.category === 'foods'), [state.items]);
+  const paymentLines = useMemo(() => getPaymentLines(state.items), [state.items]);
   const drinkTotals = useMemo(() => summarize(drinks), [drinks]);
   const foodTotals = useMemo(() => summarize(foods), [foods]);
   const total = drinkTotals.total + foodTotals.total;
-  const equalShare = state.guests.length > 0 ? total / state.guests.length : 0;
+  const selectedPaymentLineSet = useMemo(() => new Set(selectedPaymentLines), [selectedPaymentLines]);
+  const selectedPaymentSubtotal = useMemo(
+    () =>
+      paymentLines.reduce((subtotal, line) => (selectedPaymentLineSet.has(line.key) ? subtotal + line.price : subtotal), 0),
+    [paymentLines, selectedPaymentLineSet]
+  );
 
   function addTile(tile: Tile, category: Category, sideDish?: SideDish): void {
     const finalName = formatDishName(tile.name, sideDish?.name);
@@ -285,18 +312,40 @@ function App() {
     }));
   }
 
-  function addGuest(): void {
-    setState((current) => ({
-      ...current,
-      guests: [...current.guests, { id: createId(), name: `Guest ${current.guests.length + 1}` }]
-    }));
+  function togglePaymentLine(line: PaymentLine): void {
+    setSelectedPaymentLines((current) =>
+      current.includes(line.key) ? current.filter((key) => key !== line.key) : [...current, line.key]
+    );
   }
 
-  function updateGuestName(guestId: string, name: string): void {
+  function markPaid(): void {
+    if (selectedPaymentLines.length === 0) {
+      setState((current) => ({
+        ...current,
+        items: []
+      }));
+      return;
+    }
+
+    const selectedCounts = new Map<string, number>();
+
+    paymentLines.forEach((line) => {
+      if (selectedPaymentLines.includes(line.key)) {
+        selectedCounts.set(line.sourceId, (selectedCounts.get(line.sourceId) ?? 0) + 1);
+      }
+    });
+
     setState((current) => ({
       ...current,
-      guests: current.guests.map((guest) => (guest.id === guestId ? { ...guest, name } : guest))
+      items: current.items
+        .map((item) => {
+          const nextQuantity = item.quantity - (selectedCounts.get(item.id) ?? 0);
+          return { ...item, quantity: nextQuantity };
+        })
+        .filter((item) => item.quantity > 0)
     }));
+
+    setSelectedPaymentLines([]);
   }
 
   function syncActivePanel(): void {
@@ -324,6 +373,12 @@ function App() {
     track.scrollTo({ left: track.clientWidth * index, behavior: 'smooth' });
     setState((current) => (current.activePanel === panel ? current : { ...current, activePanel: panel }));
   }
+
+  useEffect(() => {
+    const validKeys = new Set(paymentLines.map((line) => line.key));
+
+    setSelectedPaymentLines((current) => current.filter((key) => validKeys.has(key)));
+  }, [paymentLines]);
 
   return (
     <main className="app-shell">
@@ -465,48 +520,88 @@ function App() {
             <div className="panel-head">
               <div>
                 <p className="eyebrow">Payment</p>
-                <h2>Overview and bill split</h2>
+                <h2>Grand total</h2>
               </div>
               <strong>{formatMoney(total)}</strong>
             </div>
 
+            <div className="payment-section">
+              <div className="payment-section-head">
+                <strong>Drinks</strong>
+                <span>{formatMoney(drinkTotals.drinks)}</span>
+              </div>
+
+              <div className="payment-line-list">
+                {paymentLines.filter((line) => line.category === 'drinks').length === 0 ? (
+                  <p className="empty-state">No drinks added yet.</p>
+                ) : (
+                  paymentLines
+                    .filter((line) => line.category === 'drinks')
+                    .map((line) => (
+                      <button
+                        key={line.key}
+                        type="button"
+                        className={selectedPaymentLineSet.has(line.key) ? 'order-row payment-line selected' : 'order-row payment-line'}
+                        onClick={() => togglePaymentLine(line)}
+                      >
+                        <div>
+                          <strong>{line.name}</strong>
+                          <span>{formatMoney(line.price)}</span>
+                        </div>
+                      </button>
+                    ))
+                )}
+              </div>
+            </div>
+
+            <div className="payment-section">
+              <div className="payment-section-head">
+                <strong>Foods</strong>
+                <span>{formatMoney(foodTotals.foods)}</span>
+              </div>
+
+              <div className="payment-line-list">
+                {paymentLines.filter((line) => line.category === 'foods').length === 0 ? (
+                  <p className="empty-state">No foods added yet.</p>
+                ) : (
+                  paymentLines
+                    .filter((line) => line.category === 'foods')
+                    .map((line) => (
+                      <button
+                        key={line.key}
+                        type="button"
+                        className={selectedPaymentLineSet.has(line.key) ? 'order-row payment-line selected' : 'order-row payment-line'}
+                        onClick={() => togglePaymentLine(line)}
+                      >
+                        <div>
+                          <strong>{line.name}</strong>
+                          <span>{formatMoney(line.price)}</span>
+                        </div>
+                      </button>
+                    ))
+                )}
+              </div>
+            </div>
+
             <div className="split-summary-grid">
               <article>
-                <strong>{formatMoney(drinkTotals.drinks)}</strong>
-                <span>Drinks</span>
+                <strong>{formatMoney(selectedPaymentSubtotal)}</strong>
+                <span>Subtotal</span>
               </article>
               <article>
-                <strong>{formatMoney(foodTotals.foods)}</strong>
-                <span>Foods</span>
+                <strong>{selectedPaymentLines.length}</strong>
+                <span>Selected items</span>
               </article>
               <article>
-                <strong>{formatMoney(equalShare)}</strong>
-                <span>Equal share</span>
+                <strong>{formatMoney(total - selectedPaymentSubtotal)}</strong>
+                <span>Remaining</span>
               </article>
             </div>
 
             <div className="split-toolbar">
-              <button type="button" className={state.splitMode === 'guest' ? 'tab active' : 'tab'} onClick={() => setState((current) => ({ ...current, splitMode: 'guest' }))}>
-                By guest
+              <button type="button" className="tab active" onClick={markPaid}>
+                Bezahlt
               </button>
-              <button type="button" className={state.splitMode === 'equal' ? 'tab active' : 'tab'} onClick={() => setState((current) => ({ ...current, splitMode: 'equal' }))}>
-                Equal split
-              </button>
-              <button type="button" className="tab" onClick={addGuest}>
-                Add guest
-              </button>
-            </div>
-
-            <div className="guest-grid">
-              {state.guests.map((guest, index) => (
-                <article className="guest-card" key={guest.id}>
-                  <label>
-                    Guest {index + 1}
-                    <input value={guest.name} onChange={(event) => updateGuestName(guest.id, event.target.value)} />
-                  </label>
-                  <strong>{formatMoney(equalShare)}</strong>
-                </article>
-              ))}
             </div>
           </section>
         </div>
