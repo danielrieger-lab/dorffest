@@ -52,6 +52,7 @@ const STORAGE_KEY = 'dorffest:state';
 const currencyFormatter = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'EUR' });
 
 const sideDishOptions: SideDish[] = [
+  { name: 'Beilagensalat', price: 3.5 },
   { name: 'Knödel', price: 5 },
   { name: 'Kartoffelsalat', price: 4 },
   { name: 'Pommes', price: 4 },
@@ -79,7 +80,6 @@ const drinkTiles: Tile[] = [
 
 const foodTiles: Tile[] = [
   { id: 'spanferkel', name: 'Spanferkel', price: 9 },
-  { id: 'beilagensalat', name: 'Beilagensalat', price: 3.5 },
   { id: 'ziegelhuettenteller', name: 'Ziegelhüttenteller', price: 11.5 },
   { id: 'steak', name: 'Steak', price: 4.5 },
   { id: 'grillwurst', name: 'Grillwurst', price: 2.5 },
