@@ -232,6 +232,11 @@ button:hover {
   width: 100%;
 }
 
+.beilagen-button {
+  grid-column: 1 / -1;
+  min-height: 0;
+}
+
 .order-tile strong,
 .panel-head strong,
 .guest-card strong {

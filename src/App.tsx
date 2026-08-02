@@ -202,6 +202,7 @@ function App() {
   const [otherFoodTitle, setOtherFoodTitle] = useState('');
   const [otherFoodPrice, setOtherFoodPrice] = useState('0,00');
   const [pendingMainDish, setPendingMainDish] = useState<Tile | null>(null);
+  const [beilagenMenuOpen, setBeilagenMenuOpen] = useState(false);
   const [selectedPaymentLines, setSelectedPaymentLines] = useState<string[]>([]);
 
   useEffect(() => {
@@ -254,6 +255,7 @@ function App() {
 
   function handleFoodTileClick(tile: Tile): void {
     if (mainDishesWithSides.has(tile.id)) {
+      setBeilagenMenuOpen(false);
       setPendingMainDish(tile);
       return;
     }
@@ -263,11 +265,36 @@ function App() {
 
   function selectSideDish(sideDish: SideDish): void {
     if (!pendingMainDish) {
+      setState((current) => ({
+        ...current,
+        items: [
+          {
+            id: createId(),
+            category: 'foods',
+            name: sideDish.name,
+            price: sideDish.price,
+            quantity: 1
+          },
+          ...current.items
+        ]
+      }));
+
+      setBeilagenMenuOpen(false);
       return;
     }
 
     addTile(pendingMainDish, 'foods', sideDish);
     setPendingMainDish(null);
+  }
+
+  function openSideDishMenu(): void {
+    setPendingMainDish(null);
+    setBeilagenMenuOpen(true);
+  }
+
+  function closeSideDishMenu(): void {
+    setPendingMainDish(null);
+    setBeilagenMenuOpen(false);
   }
 
   function addOtherFood(): void {
@@ -471,6 +498,10 @@ function App() {
                 </button>
               ))}
 
+              <button type="button" className="tab beilagen-button" onClick={openSideDishMenu}>
+                Beilagen
+              </button>
+
               <div className="order-tile order-tile-custom">
                 <strong>Sonstiges</strong>
                 <label>
@@ -607,15 +638,15 @@ function App() {
         </div>
       </section>
 
-      {pendingMainDish ? (
-        <div className="side-dish-backdrop" role="presentation" onClick={() => setPendingMainDish(null)}>
+      {pendingMainDish || beilagenMenuOpen ? (
+        <div className="side-dish-backdrop" role="presentation" onClick={closeSideDishMenu}>
           <section className="side-dish-modal" role="dialog" aria-modal="true" aria-labelledby="side-dish-title" onClick={(event) => event.stopPropagation()}>
             <div className="panel-head">
               <div>
                 <p className="eyebrow">Beilage</p>
-                <h2 id="side-dish-title">Choose a side dish</h2>
+                <h2 id="side-dish-title">{pendingMainDish ? 'Choose a side dish' : 'Beilagen'}</h2>
               </div>
-              <strong>{pendingMainDish.name}</strong>
+              <strong>{pendingMainDish ? pendingMainDish.name : 'Side dishes'}</strong>
             </div>
 
             <div className="side-dish-grid">
@@ -628,7 +659,7 @@ function App() {
             </div>
 
             <div className="split-toolbar">
-              <button type="button" className="tab" onClick={() => setPendingMainDish(null)}>
+              <button type="button" className="tab" onClick={closeSideDishMenu}>
                 Cancel
               </button>
             </div>
